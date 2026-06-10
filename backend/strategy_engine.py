@@ -167,9 +167,7 @@ def _check_market_regime() -> bool:
                 "Market regime: no data returned for %s — blocking trade.",
                 MARKET_INDEX_SYMBOL,
             )
-            tg.notify_no_trade(
-                f"Market filter FAILED: no data for {MARKET_INDEX_SYMBOL}"
-            )
+            #tg.notify_no_trade(f"Market filter FAILED: no data for {MARKET_INDEX_SYMBOL}")
             return False
 
         ltp    = info["lp"]
@@ -181,7 +179,7 @@ def _check_market_regime() -> bool:
         )
 
         if change >= MARKET_MIN_CHANGE_PTS:
-            tg.notify_market_pass(MARKET_INDEX_SYMBOL, change)
+            #tg.notify_market_pass(MARKET_INDEX_SYMBOL, change)
             return True
 
         # FAIL — log clearly and block all further execution
@@ -189,12 +187,12 @@ def _check_market_regime() -> bool:
             "Market regime FAILED: Δ=%.2f < %.0f — NO TRADE TODAY.",
             change, MARKET_MIN_CHANGE_PTS,
         )
-        tg.notify_market_fail(MARKET_INDEX_SYMBOL, change)
+        #tg.notify_market_fail(MARKET_INDEX_SYMBOL, change)
         return False
 
     except Exception as exc:
         logger.error("Market regime check threw: %s — blocking trade as safe default.", exc)
-        tg.notify_no_trade(f"Market filter error: {exc}")
+        #tg.notify_no_trade(f"Market filter error: {exc}")
         return False
 
 
@@ -223,7 +221,7 @@ def run_strategy() -> None:
     candidates = s3_utils.load_today_candidates()
     if candidates.empty:
         logger.info("Gate 1 FAILED: insufficient candidates today.")
-        tg.notify_no_trade("Fewer than 2 candidates in today's CSV.")
+        #tg.notify_no_trade("Fewer than 2 candidates in today's CSV.")
         return
 
     logger.info("Gate 1 PASSED: %d candidates loaded.", len(candidates))
@@ -251,7 +249,7 @@ def run_strategy() -> None:
         quote_map = _batch_quotes(fyers_symbols)
     except Exception as exc:
         logger.exception("Batch quote fetch failed.")
-        tg.notify_no_trade(f"LTP batch fetch error: {exc}")
+        #tg.notify_no_trade(f"LTP batch fetch error: {exc}")
         return
 
     # ─────────────────────────────────────────────────────────
@@ -279,7 +277,7 @@ def run_strategy() -> None:
     ranked.sort(key=lambda x: x["sl_pct"])
 
     if not ranked:
-        tg.notify_no_trade("No live prices available for any candidate.")
+        #tg.notify_no_trade("No live prices available for any candidate.")
         return
 
     logger.info("─── Candidate ranking (live SL%%) ───")
@@ -312,18 +310,18 @@ def run_strategy() -> None:
         if sl_pct > MAX_SL_PCT:
             reason = f"Actual SL% {sl_pct:.2f}% exceeds max {MAX_SL_PCT}%"
             logger.info("REJECTED %s — %s", raw, reason)
-            tg.notify_rejection(raw, reason)
+            #tg.notify_rejection(raw, reason)
             continue
 
         # ── b. Position sizing ────────────────────────────────
         try:
             qty = _calc_qty(ltp, csv_sl, capital)
         except ValueError as exc:
-            tg.notify_rejection(raw, str(exc))
+            #tg.notify_rejection(raw, str(exc))
             continue
 
         if qty <= 0:
-            tg.notify_rejection(raw, "Qty = 0 (insufficient capital or SL too wide).")
+            #tg.notify_rejection(raw, "Qty = 0 (insufficient capital or SL too wide).")
             continue
 
         risk_per_share = ltp - csv_sl
@@ -339,11 +337,11 @@ def run_strategy() -> None:
             entry_price = _await_fill(order_id)
         except Exception as exc:
             logger.error("BUY failed for %s: %s", sym, exc)
-            tg.notify_rejection(raw, f"Order error: {exc}")
+            #tg.notify_rejection(raw, f"Order error: {exc}")
             continue
 
         logger.info("FILLED: %s  entry=₹%.2f  qty=%d", raw, entry_price, qty)
-        tg.notify_trade_entry(raw, entry_price, csv_sl, qty, sl_pct)
+        #tg.notify_trade_entry(raw, entry_price, csv_sl, qty, sl_pct)
 
         # ── d. Write OPEN record to S3 journal ────────────────
         s3_utils.create_trade({
@@ -377,7 +375,7 @@ def run_strategy() -> None:
 
     # All candidates exhausted without a single entry
     logger.info("All candidates exhausted — no trade placed today.")
-    tg.notify_no_trade("All candidates rejected or orders failed.")
+    #tg.notify_no_trade("All candidates rejected or orders failed.")
 
 
 
