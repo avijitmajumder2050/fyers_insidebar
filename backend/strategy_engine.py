@@ -20,6 +20,7 @@ import logging
 import math
 from datetime import date
 import time
+import os
 
 from autologin import fyers
 import s3_utils
@@ -45,6 +46,14 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 # Market data helpers
 # ─────────────────────────────────────────────────────────────
+
+
+START_FLAG_FILE = "/tmp/insidebar_started.flag"
+
+def notify_start_once():
+    if not os.path.exists(START_FLAG_FILE):
+        tg.notify_system_start()
+        open(START_FLAG_FILE, "w").close()
 
 def _batch_quotes(symbols: list[str]) -> dict[str, dict]:
     """
@@ -382,7 +391,7 @@ def run_strategy() -> None:
 
 
 def run_strategy_forever():
-    tg.notify_system_start()
+    notify_start_once()
     while True:
         try:
             run_strategy()
