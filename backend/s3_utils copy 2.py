@@ -54,43 +54,30 @@ def _write_csv(df: pd.DataFrame, key: str) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def load_today_candidates() -> pd.DataFrame:
+    """
+    Read insidebar CSV from S3, filter to today's rows, sort by sl_pct ASC.
+    Returns an empty DataFrame if fewer than MIN_CANDIDATES rows found.
+    """
     df = _read_csv(S3_INSIDEBAR_CSV)
-
     df.columns = df.columns.str.strip().str.lower()
 
-    df["trade_date"] = pd.to_datetime(
-        df["trade_date"],
-        errors="coerce"
-    ).dt.date
-
-    today = date.today()
-
-    logger.info("Today's date: %s", today)
-
-    today_df = df[df["trade_date"] == today].copy()
-
-    logger.info(
-        "Candidates found for today: %d",
-        len(today_df)
-    )
+    # CSV date format is  M/D/YYYY  e.g. "6/9/2026"
+    today_str = date.today().strftime("%-m/%-d/%Y")
+    df["trade_date"] = df["trade_date"].astype(str).str.strip()
+    today_df = df[df["trade_date"] == today_str].copy()
 
     if len(today_df) < MIN_CANDIDATES:
         logger.info(
             "Only %d candidate(s) for today — need >= %d. Stopping.",
-            len(today_df),
-            MIN_CANDIDATES
+            len(today_df), MIN_CANDIDATES,
         )
         return pd.DataFrame()
 
     today_df.sort_values("sl_pct", ascending=True, inplace=True)
     today_df.reset_index(drop=True, inplace=True)
-
-    logger.info(
-        "Loaded %d candidates (sorted by SL%%).",
-        len(today_df)
-    )
-
+    logger.info("Loaded %d candidates (sorted by SL%%).", len(today_df))
     return today_df
+
 
 # ─────────────────────────────────────────────────────────────
 # Journal helpers
