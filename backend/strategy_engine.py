@@ -21,6 +21,7 @@ import math
 from datetime import date
 import time
 import os
+import json
 
 from autologin import fyers
 import s3_utils
@@ -119,26 +120,45 @@ def _calc_qty(ltp: float, sl: float, capital: float) -> int:
 # ─────────────────────────────────────────────────────────────
 # Order helpers
 # ─────────────────────────────────────────────────────────────
-
 def _place_market_buy(symbol: str, qty: int) -> str:
-    """Place MARKET BUY INTRADAY. Returns order_id. Raises on rejection."""
-    resp = fyers.place_order(data={
-        "symbol":       symbol,
-        "qty":          qty,
-        "type":         ORDER_TYPE_MARKET,
-        "side":         ORDER_SIDE_BUY,
-        "productType":  PRODUCT_TYPE,
-        "limitPrice":   0,
-        "stopPrice":    0,
-        "validity":     "DAY",
+    """Place MARKET BUY INTRADAY. Returns order_id."""
+
+    payload = {
+        "symbol": symbol,
+        "qty": qty,
+        "type": ORDER_TYPE_MARKET,
+        "side": ORDER_SIDE_BUY,
+        "productType": PRODUCT_TYPE,
+        "limitPrice": 0,
+        "stopPrice": 0,
+        "validity": "DAY",
         "disclosedQty": 0,
         "offlineOrder": False,
-    })
+    }
+
+    logger.info(
+        "FYERS ORDER REQUEST:\n%s",
+        json.dumps(payload, indent=2)
+    )
+
+    resp = fyers.place_order(data=payload)
+
+    logger.info(
+        "FYERS ORDER RESPONSE:\n%s",
+        json.dumps(resp, indent=2)
+    )
+
     if resp.get("code") != 200:
         raise RuntimeError(f"Buy order rejected: {resp}")
-    logger.info("BUY placed: %s  qty=%d  id=%s", symbol, qty, resp["id"])
-    return resp["id"]
 
+    logger.info(
+        "BUY placed: %s qty=%d id=%s",
+        symbol,
+        qty,
+        resp["id"]
+    )
+
+    return resp["id"]
 
 def _await_fill(order_id: str) -> float:
     """Poll orderbook up to 10 s for fill confirmation. Returns tradedPrice."""
