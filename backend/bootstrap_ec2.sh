@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================
-# FYERS InsideBar FULL PRODUCTION INSTALLER (FIXED)
-# Docker + systemd + persistent trading bot + S3 logs
+# FYERS InsideBar FULL PRODUCTION INSTALLER (FIXED LOGGING)
+# Docker + systemd + S3 logs (FIXED)
 # =============================================================
 
 set -euo pipefail
@@ -18,7 +18,7 @@ LOG_FILE="/var/log/fyers_insidebar.log"
 S3_BUCKET="s3://dhan-trading-data/trading-bot/logs"
 
 echo "================================================"
-echo "  FYERS InsideBar INSTALLER (PRODUCTION FIXED)"
+echo "  FYERS InsideBar INSTALLER (FIXED LOG SYSTEM)"
 echo "================================================"
 
 # -------------------------------------------------------------
@@ -43,7 +43,7 @@ git clone "$REPO_URL" "$APP_DIR"
 echo "✅ Repo cloned"
 
 # -------------------------------------------------------------
-# 3. BUILD DOCKER IMAGE (BACKEND ONLY)
+# 3. BUILD DOCKER IMAGE
 # -------------------------------------------------------------
 cd "$BACKEND_DIR"
 
@@ -54,7 +54,7 @@ docker build --no-cache -t "$IMAGE_NAME" .
 echo "✅ Docker image built"
 
 # -------------------------------------------------------------
-# 4. RUN SCRIPT (FIXED)
+# 4. RUN CONTAINER (FIXED - NO VOLUME MOUNT)
 # -------------------------------------------------------------
 cat > /home/ec2-user/run_strategy.sh << 'EOF'
 #!/bin/bash
@@ -63,7 +63,7 @@ set -euo pipefail
 IMAGE_NAME="fyers-insidebar"
 CONTAINER_NAME="insidebar-strategy"
 
-echo "Stopping old container if exists..."
+echo "Stopping old container..."
 docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 echo "Starting new container..."
@@ -71,20 +71,79 @@ echo "Starting new container..."
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
-  -v /var/log/fyers_insidebar.log:/app/logs/app.log \
   "$IMAGE_NAME"
 
-echo "Container started successfully"
+echo "Container started"
 EOF
 
 chmod +x /home/ec2-user/run_strategy.sh
 
 # -------------------------------------------------------------
-# 5. LOG SYNC SERVICE (S3 BACKUP)
+# 5. LOG CAPTURE FROM DOCKER
+# -------------------------------------------------------------
+cat > /home/ec2-user/docker_log_capture.sh << 'EOF'
+#!/bin/bash
+
+CONTAINER_NAME="insidebar-strategy"
+LOG_FILE="/var/log/fyers_insidebar.log"
+
+mkdir -p /var/log
+
+while true
+do
+  docker logs --timestamps "$CONTAINER_NAME" >> "$LOG_FILE" 2>&1
+  sleep 5
+done
+EOF
+
+chmod +x /home/ec2-user/docker_log_capture.sh
+
+# -------------------------------------------------------------
+# 6. SYSTEMD: STRATEGY SERVICE
+# -------------------------------------------------------------
+cat > /etc/systemd/system/fyers-strategy.service << 'EOF'
+[Unit]
+Description=FYERS InsideBar Strategy
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+ExecStart=/bin/bash /home/ec2-user/run_strategy.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# -------------------------------------------------------------
+# 7. SYSTEMD: LOG CAPTURE SERVICE
+# -------------------------------------------------------------
+cat > /etc/systemd/system/fyers-docker-logs.service << 'EOF'
+[Unit]
+Description=Docker Log Capture Service
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+ExecStart=/bin/bash /home/ec2-user/docker_log_capture.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# -------------------------------------------------------------
+# 8. S3 LOG SYNC SERVICE
 # -------------------------------------------------------------
 cat > /home/ec2-user/log_sync.sh << 'EOF'
 #!/bin/bash
-set -euo pipefail
 
 LOG_FILE="/var/log/fyers_insidebar.log"
 S3_BUCKET="s3://dhan-trading-data/trading-bot/logs"
@@ -105,44 +164,15 @@ EOF
 
 chmod +x /home/ec2-user/log_sync.sh
 
-# -------------------------------------------------------------
-# 6. SYSTEMD SERVICE (FIXED - LONG RUNNING)
-# -------------------------------------------------------------
-cat > /etc/systemd/system/fyers-strategy.service << 'EOF'
-[Unit]
-Description=FYERS InsideBar Trading Strategy
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-User=ec2-user
-WorkingDirectory=/home/ec2-user
-
-ExecStart=/bin/bash /home/ec2-user/run_strategy.sh
-
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# -------------------------------------------------------------
-# 7. LOG SYNC SYSTEMD SERVICE
-# -------------------------------------------------------------
 cat > /etc/systemd/system/fyers-log-sync.service << 'EOF'
 [Unit]
-Description=FYERS Log Sync to S3
+Description=S3 Log Sync Service
 After=network.target
 
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/home/ec2-user
-
 ExecStart=/bin/bash /home/ec2-user/log_sync.sh
-
 Restart=always
 RestartSec=5
 
@@ -151,22 +181,24 @@ WantedBy=multi-user.target
 EOF
 
 # -------------------------------------------------------------
-# 8. ENABLE SERVICES
+# 9. ENABLE SERVICES
 # -------------------------------------------------------------
 systemctl daemon-reload
 
 systemctl enable fyers-strategy.service
+systemctl enable fyers-docker-logs.service
 systemctl enable fyers-log-sync.service
 
 systemctl restart fyers-strategy.service
+systemctl restart fyers-docker-logs.service
 systemctl restart fyers-log-sync.service
 
 echo "================================================"
-echo "  INSTALLATION COMPLETE (PRODUCTION READY)"
+echo "  INSTALLATION COMPLETE (FIXED & PRODUCTION READY)"
 echo "================================================"
-echo "✔ Docker running in background (-d enabled)"
-echo "✔ Restart policy: unless-stopped"
-echo "✔ systemd: persistent service"
-echo "✔ S3 log sync active"
-echo "✔ Auto recovery enabled"
+echo "✔ Docker running in background"
+echo "✔ Logs captured from container stdout"
+echo "✔ Logs stored in /var/log/fyers_insidebar.log"
+echo "✔ S3 sync every 5 minutes"
+echo "✔ systemd auto-recovery enabled"
 echo "================================================"

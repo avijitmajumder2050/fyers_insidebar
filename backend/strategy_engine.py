@@ -201,6 +201,7 @@ def _check_market_regime() -> bool:
 # ─────────────────────────────────────────────────────────────
 
 def run_strategy() -> None:
+    global SYSTEM_START_SENT   # ⭐ REQUIRED FIX
     logger.info("══════════════════════════════════════════════")
     logger.info("  InsideBar Breakout Strategy — session start  ")
     logger.info("══════════════════════════════════════════════")
