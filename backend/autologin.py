@@ -26,7 +26,7 @@ from fyers_apiv3.fyersModel import SessionModel
 from config import (
     get_ssm, put_ssm,
     SSM_ACCESS_TOKEN, SSM_CLIENT_ID, SSM_SECRET_KEY,
-    SSM_REDIRECT_URI, SSM_TOTP_KEY, SSM_USERNAME, SSM_PIN,
+    SSM_REDIRECT_URI, SSM_TOTP_KEY, SSM_USERNAME, SSM_PIN,APP_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,8 @@ def _generate_fresh_token(client_id: str, secret_key: str, redirect_uri: str) ->
     username = get_ssm(SSM_USERNAME)
     pin      = get_ssm(SSM_PIN)
     totp_key = get_ssm(SSM_TOTP_KEY)
+    app_id = get_ssm(APP_ID)
+    
 
     totp = pyotp.TOTP(totp_key)
 
@@ -81,8 +83,8 @@ def _generate_fresh_token(client_id: str, secret_key: str, redirect_uri: str) ->
 
     # ── Step 1: Send OTP ──────────────────────────────────────
     r1 = requests.post(
-        "https://api-t2.fyers.in/vagator/v2/send_login_otp_v2",
-        json={"fy_id": username, "app_id": "2"},
+        "https://api-t2.fyers.in/vagator/v2/send_login_otp",
+        json={"fy_id": username, "app_id": app_id},
         timeout=15,
     )
     r1.raise_for_status()
@@ -101,7 +103,7 @@ def _generate_fresh_token(client_id: str, secret_key: str, redirect_uri: str) ->
 
     # ── Step 3: Verify PIN ────────────────────────────────────
     r3 = requests.post(
-        "https://api-t2.fyers.in/vagator/v2/verify_pin_v2",
+        "https://api-t2.fyers.in/vagator/v2/verify_pin",
         json={
             "request_key":   request_key,
             "identity_type": "pin",
