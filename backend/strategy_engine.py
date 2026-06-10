@@ -19,6 +19,7 @@ Execution order:
 import logging
 import math
 from datetime import date
+import time
 
 from autologin import fyers
 import s3_utils
@@ -379,8 +380,18 @@ def run_strategy() -> None:
     tg.notify_no_trade("All candidates rejected or orders failed.")
 
 
+
+def run_strategy_forever():
+    while True:
+        try:
+            run_strategy()
+        except Exception as e:
+            logger.error("Strategy crashed: %s", e)
+
+        # sleep before next scan
+        time.sleep(60)
 # ─────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    run_strategy()
+    run_strategy_forever()
