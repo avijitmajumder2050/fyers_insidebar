@@ -154,8 +154,7 @@ do
     TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 
     aws s3 cp "$LOG_FILE" \
-      "$S3_BUCKET/fyers_insidebar_$TIMESTAMP.log" \
-      --only-show-errors
+      "$S3_BUCKET/fyers_insidebar.log"
   fi
 
   sleep 300
