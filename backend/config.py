@@ -12,6 +12,7 @@ import boto3
 # ─────────────────────────────────────────────────────────────
 AWS_REGION = "ap-south-1"
 S3_BUCKET  = "dhan-trading-data"
+AVAILABLE_FUND_INR = 10000
 
 # S3 paths — trade data only, NO auth data here
 S3_INSIDEBAR_CSV = "uploads/fyer_insiderbar_brekout.csv"
