@@ -45,7 +45,7 @@ ACCOUNT_RISK_INR  = 1000           # ₹ risked per trade
 LEVERAGE          = 5              # intraday leverage multiplier
 
 PRODUCT_TYPE      = "INTRADAY"
-ORDER_TYPE_MARKET = 1              # Fyers: 1 = MARKET
+ORDER_TYPE_MARKET = 2              # Fyers: 2 =  Market Order
 ORDER_TYPE_STOP   = 3              # Fyers: 3 = STOP-MARKET (SL-M)
 ORDER_SIDE_BUY    = 1
 ORDER_SIDE_SELL   = -1
