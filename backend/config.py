@@ -34,12 +34,12 @@ SSM_APP_ID    = "/fyers/APP_ID"      # ABCDE
 # MARKET REGIME FILTER
 # ─────────────────────────────────────────────────────────────
 MARKET_INDEX_SYMBOL    = "NSE:NIFTYMIDSML400-INDEX"
-MARKET_MIN_CHANGE_PTS  = -300        # NIFTYMIDSML400 must be up >= +50 pts
+MARKET_MIN_CHANGE_PTS  = 50        # NIFTYMIDSML400 must be up >= +50 pts
 
 # ─────────────────────────────────────────────────────────────
 # STRATEGY CONSTANTS
 # ─────────────────────────────────────────────────────────────
-MIN_CANDIDATES    = 1              # need >= 2 rows for today to proceed
+MIN_CANDIDATES    = 2              # need >= 2 rows for today to proceed
 MAX_SL_PCT        = 2.0            # reject stock if actual SL% > 2%
 ACCOUNT_RISK_INR  = 1000           # ₹ risked per trade
 LEVERAGE          = 5              # intraday leverage multiplier

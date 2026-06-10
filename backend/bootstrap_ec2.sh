@@ -78,6 +78,9 @@ echo "✅ Container started"
 
 mkdir -p /var/log
 touch "$LOG_FILE"
+
+chown ec2-user:ec2-user "$LOG_FILE"
+chmod 664 "$LOG_FILE"
 # -------------------------------------------------------------
 cat > /home/ec2-user/docker_log_capture.sh << 'EOF'
 #!/bin/bash
@@ -86,6 +89,7 @@ CONTAINER_NAME="insidebar-strategy"
 LOG_FILE="/var/log/fyers_insidebar.log"
 
 mkdir -p /var/log
+
 
 while true
 do
