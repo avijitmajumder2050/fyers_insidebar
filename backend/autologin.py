@@ -25,8 +25,8 @@ from fyers_apiv3.fyersModel import SessionModel
 
 from config import (
     get_ssm, put_ssm,
-    SSM_ACCESS_TOKEN, SSM_CLIENT_ID, SSM_SECRET_KEY,
-    SSM_REDIRECT_URI, SSM_TOTP_KEY, SSM_USERNAME, SSM_PIN,APP_ID,
+    SSM_ACCESS_TOKEN, SSM_CLIENT_ID,SSM_APP_ID, SSM_SECRET_KEY,
+    SSM_REDIRECT_URI, SSM_TOTP_KEY, SSM_USERNAME, SSM_PIN,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def _generate_fresh_token(client_id: str, secret_key: str, redirect_uri: str) ->
     username = get_ssm(SSM_USERNAME)
     pin      = get_ssm(SSM_PIN)
     totp_key = get_ssm(SSM_TOTP_KEY)
-    app_id = get_ssm(APP_ID)
+    app_id = get_ssm(SSM_APP_ID)
     
 
     totp = pyotp.TOTP(totp_key)

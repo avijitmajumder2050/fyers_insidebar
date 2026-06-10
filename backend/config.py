@@ -27,6 +27,7 @@ SSM_USERNAME       = "/fyers/FY_ID"
 SSM_PIN            = "/fyers/PIN"
 SSM_TELEGRAM_TOKEN = "/trading-bot/telegram/BOT_TOKEN"
 SSM_TELEGRAM_CHAT  = "/trading-bot/telegram/CHAT_ID"
+SSM_APP_ID    = "/fyers/APP_ID"      # ABCDE
 
 # ─────────────────────────────────────────────────────────────
 # MARKET REGIME FILTER
