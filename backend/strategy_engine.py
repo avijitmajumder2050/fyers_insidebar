@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 # Market data helpers
 # ─────────────────────────────────────────────────────────────
-
+SYSTEM_START_SENT = False
 def _batch_quotes(symbols: list[str]) -> dict[str, dict]:
     """
     Single Fyers API call for multiple symbols.
@@ -204,7 +204,11 @@ def run_strategy() -> None:
     logger.info("══════════════════════════════════════════════")
     logger.info("  InsideBar Breakout Strategy — session start  ")
     logger.info("══════════════════════════════════════════════")
-    tg.notify_system_start()
+    # ONLY ONCE
+    if not SYSTEM_START_SENT:
+        tg.notify_system_start()
+        SYSTEM_START_SENT = True
+    
 
     # ─────────────────────────────────────────────────────────
     # Gate 0: Market regime filter
