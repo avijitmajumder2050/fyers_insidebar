@@ -56,30 +56,28 @@ echo "✅ Docker image built"
 # -------------------------------------------------------------
 # 4. RUN CONTAINER (FIXED - NO VOLUME MOUNT)
 # -------------------------------------------------------------
-cat > /home/ec2-user/run_strategy.sh << 'EOF'
-#!/bin/bash
-set -euo pipefail
 
-IMAGE_NAME="fyers-insidebar"
-CONTAINER_NAME="insidebar-strategy"
-
-echo "Stopping old container..."
 docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-
-echo "Starting new container..."
 
 docker run -d \
   --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
+  --restart on-failure:5 \
+  --log-driver json-file \
+  --log-opt max-size=10m \
+  --log-opt max-file=3 \
   "$IMAGE_NAME"
 
-echo "Container started"
-EOF
+echo "✅ Container started"
 
-chmod +x /home/ec2-user/run_strategy.sh
+
+
 
 # -------------------------------------------------------------
 # 5. LOG CAPTURE FROM DOCKER
+# -------------------------------------------------------------
+
+mkdir -p /var/log
+touch "$LOG_FILE"
 # -------------------------------------------------------------
 cat > /home/ec2-user/docker_log_capture.sh << 'EOF'
 #!/bin/bash
@@ -98,26 +96,6 @@ EOF
 
 chmod +x /home/ec2-user/docker_log_capture.sh
 
-# -------------------------------------------------------------
-# 6. SYSTEMD: STRATEGY SERVICE
-# -------------------------------------------------------------
-cat > /etc/systemd/system/fyers-strategy.service << 'EOF'
-[Unit]
-Description=FYERS InsideBar Strategy
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-User=ec2-user
-WorkingDirectory=/home/ec2-user
-ExecStart=/bin/bash /home/ec2-user/run_strategy.sh
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
 
 # -------------------------------------------------------------
 # 7. SYSTEMD: LOG CAPTURE SERVICE
@@ -184,11 +162,11 @@ EOF
 # -------------------------------------------------------------
 systemctl daemon-reload
 
-systemctl enable fyers-strategy.service
+
 systemctl enable fyers-docker-logs.service
 systemctl enable fyers-log-sync.service
 
-systemctl restart fyers-strategy.service
+
 systemctl restart fyers-docker-logs.service
 systemctl restart fyers-log-sync.service
 

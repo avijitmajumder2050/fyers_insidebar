@@ -101,9 +101,10 @@ def to_fyers_symbol(raw: str) -> str:
 # Risk helpers
 # ─────────────────────────────────────────────────────────────
 
+
 def _calc_sl_pct(ltp: float, sl: float) -> float:
     """Actual SL% based on live LTP (not CSV entry price)."""
-    return round(((ltp - sl) / ltp) * 100, 2)
+    return round(abs((ltp - sl) / ltp) * 100, 2)
 
 
 def _calc_qty(ltp: float, sl: float, capital: float) -> int:
@@ -229,6 +230,7 @@ def run_strategy() -> None:
     # Gate 1: Daily candidate count
     # Requires >= 2 rows for today in insidebar CSV.
     # ─────────────────────────────────────────────────────────
+    logger.info("STEP-1 LOAD CANDIDATES")
     candidates = s3_utils.load_today_candidates()
     if candidates.empty:
         logger.info("Gate 1 FAILED: insufficient candidates today.")
@@ -242,6 +244,7 @@ def run_strategy() -> None:
     # Check S3 journal for any record with today's date,
     # regardless of status (OPEN / ACTIVE / CLOSED).
     # ─────────────────────────────────────────────────────────
+    logger.info("STEP-2 CANDIDATES LOADED")
     if s3_utils.has_trade_today():
         logger.info("Gate 2 FAILED: trade already recorded today — stopping.")
         tg.notify_no_trade("A trade was already taken today.")
@@ -252,6 +255,8 @@ def run_strategy() -> None:
     # ─────────────────────────────────────────────────────────
     # Step 3: Batch LTP fetch — single API call for all symbols
     # ─────────────────────────────────────────────────────────
+    
+    logger.info("STEP-3 TRADE LOCK CHECK")
     fyers_symbols = [
         to_fyers_symbol(str(r["stock_name"]))
         for _, r in candidates.iterrows()
@@ -267,6 +272,7 @@ def run_strategy() -> None:
     # Step 4: Build ranked list sorted by LIVE SL% ASC
     # SL% is computed from live LTP, not CSV entry price.
     # ─────────────────────────────────────────────────────────
+    logger.info("STEP-4 BUILD RANK CHECK")
     ranked = []
     for _, row in candidates.iterrows():
         raw = str(row["stock_name"]).strip()
@@ -301,6 +307,7 @@ def run_strategy() -> None:
     # ─────────────────────────────────────────────────────────
     # Step 5: Fetch available capital once (live from Fyers)
     # ─────────────────────────────────────────────────────────
+    logger.info("STEP-4 Fetch available capital once ")
     capital = _get_available_capital()
     logger.info("Available capital: ₹%.2f  Buying power (5x): ₹%.2f", capital, capital * LEVERAGE)
 
@@ -322,6 +329,14 @@ def run_strategy() -> None:
             reason = f"Actual SL% {sl_pct:.2f}% exceeds max {MAX_SL_PCT}%"
             logger.info("REJECTED %s — %s", raw, reason)
             #tg.notify_rejection(raw, reason)
+            continue
+
+        # ── a0. STRUCTURE VALIDATION (CRITICAL FIX) ─────────────
+        if csv_sl >= ltp:
+            logger.warning(
+            "REJECTED %s — INVALID LONG STRUCTURE | LTP=%.2f SL=%.2f (Case-3)",
+            raw, ltp, csv_sl
+        )
             continue
 
         # ── b. Position sizing ────────────────────────────────
