@@ -122,7 +122,7 @@ def _generate_fresh_token(client_id: str, secret_key: str, redirect_uri: str) ->
             "fyers_id":      username,
             "app_id":        client_id.split("-")[0],
             "redirect_uri":  redirect_uri,
-            "appType":       "100",
+            "appType":       "200",
             "code_challenge": "",
             "state":         "None",
             "scope":         "",
