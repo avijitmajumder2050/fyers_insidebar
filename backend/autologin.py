@@ -46,7 +46,13 @@ def _build_fyers(client_id: str, token: str) -> fyersModel.FyersModel:
 
 def _is_valid(instance: fyersModel.FyersModel) -> bool:
     try:
+        logger.info("Validating FYERS access token...")
         resp = instance.get_profile()
+        logger.info(
+            "Token validation response | code=%s | message=%s",
+            resp.get("code"),
+            resp.get("message", "")
+        )
         return resp.get("code") == 200
     except Exception as exc:
         logger.warning("Token validation failed: %s", exc)
@@ -160,6 +166,7 @@ def get_fyers_instance() -> fyersModel.FyersModel:
     redirect_uri = get_ssm(SSM_REDIRECT_URI)
 
     # 1. Try token from SSM
+    logger.info("FYERS AUTOLOGIN STARTING")
     stored_token = get_ssm(SSM_ACCESS_TOKEN)
     if stored_token:
         instance = _build_fyers(client_id, stored_token)
@@ -169,6 +176,7 @@ def get_fyers_instance() -> fyersModel.FyersModel:
         logger.info("SSM token expired — regenerating …")
 
     # 2. TOTP login → new token written to SSM inside the function
+    logger.info("Generating fresh token via TOTP login")
     new_token = _generate_fresh_token(client_id, secret_key, redirect_uri)
     instance  = _build_fyers(client_id, new_token)
 

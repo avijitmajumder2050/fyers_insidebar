@@ -34,7 +34,7 @@ SSM_APP_ID    = "/fyers/APP_ID"      # ABCDE
 # MARKET REGIME FILTER
 # ─────────────────────────────────────────────────────────────
 MARKET_INDEX_SYMBOL    = "NSE:NIFTYMIDSML400-INDEX"
-MARKET_MIN_CHANGE_PTS  = -200     # NIFTYMIDSML400 must be up >= +50 pts
+MARKET_MIN_CHANGE_PTS  = 30     # NIFTYMIDSML400 must be up >= +50 pts
 
 # ─────────────────────────────────────────────────────────────
 # STRATEGY CONSTANTS

@@ -31,7 +31,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SEC = 5   # seconds between LTP polls
+POLL_INTERVAL_SEC = 30   # seconds between LTP polls
 
 
 # ─────────────────────────────────────────────────────────────
@@ -105,8 +105,9 @@ def _market_sell(symbol: str, qty: int, reason: str) -> float:
     for attempt in (1, 2):
         try:
             resp = fyers.place_order(data=payload)
-            if resp.get("code") != 200:
-                raise RuntimeError(f"Sell rejected: {resp}")
+            if resp.get("s") != "ok":
+                raise RuntimeError(f"Sell order rejected: {resp}")
+            
             fill = _get_ltp(symbol)
             logger.info(
                 "SELL (%s): qty=%d ~₹%.2f  [attempt %d]",
@@ -216,6 +217,14 @@ def run_trade_manager(state: TradeState) -> None:
         # ── 1. Fetch LTP ──────────────────────────────────────
         try:
             ltp = _get_ltp(state.symbol)
+            logger.info(
+        "LIVE | %s | LTP=₹%.2f | SL=₹%.2f | REM_QTY=%d | RR=%s",
+        state.display_symbol,
+        ltp,
+        state.current_sl,
+        state.remaining_qty,
+        state.rr_achieved,
+    )
         except Exception as exc:
             logger.error("LTP fetch error: %s — retry in %ds", exc, POLL_INTERVAL_SEC)
             time.sleep(POLL_INTERVAL_SEC)
