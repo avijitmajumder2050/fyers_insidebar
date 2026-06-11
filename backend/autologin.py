@@ -116,7 +116,7 @@ def _generate_fresh_token(client_id: str, secret_key: str, redirect_uri: str) ->
 
     # ── Step 4: Get auth code ─────────────────────────────────
     r4 = requests.post(
-        "https://api-t2.fyers.in/api/v3/token",
+        "https://api-t1.fyers.in/api/v3/token",
         headers={"Authorization": f"Bearer {login_token}"},
         json={
             "fyers_id":      username,
