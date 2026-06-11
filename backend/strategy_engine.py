@@ -148,7 +148,7 @@ def _place_market_buy(symbol: str, qty: int) -> str:
         json.dumps(resp, indent=2)
     )
 
-    if resp.get("code") != 200:
+    if resp.get("s") != "ok":
         raise RuntimeError(f"Buy order rejected: {resp}")
 
     logger.info(
