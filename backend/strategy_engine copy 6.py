@@ -262,50 +262,10 @@ def run_strategy() -> None:
     # regardless of status (OPEN / ACTIVE / CLOSED).
     # ─────────────────────────────────────────────────────────
     logger.info("STEP-2 CANDIDATES LOADED")
-    logger.info("STEP-2 TRADE JOURNAL CHECK")
-    today_trade = s3_utils.get_today_trade()
-    if today_trade:
-        status = str(today_trade["status"]).upper()
-        logger.info(
-        "Today's trade found | Symbol=%s | Status=%s",
-        today_trade["symbol"],
-        status
-    )
-        # -----------------------------------
-    # ACTIVE / OPEN → Resume management
-    # -----------------------------------
-        if status in ["OPEN", "ACTIVE"]:
-             logger.info(
-            "Active trade detected. Handing back to trade_manager."
-        )
-             state = TradeState(
-            symbol=to_fyers_symbol(today_trade["symbol"]),
-            display_symbol=today_trade["symbol"],
-            entry_price=float(today_trade["entry_price"]),
-            sl_price=float(today_trade["sl_price"]),
-            initial_qty=int(today_trade["qty"]),
-        )
-             run_trade_manager(state)
-             logger.info(
-            "Trade manager completed existing trade."
-        )
-             return
-         # -----------------------------------
-    # CLOSED → One trade already done
-    # -----------------------------------
-        if status == "CLOSED":
-            logger.info(
-            "Trade already completed today. Stopping."
-        )
-
-            tg.notify_no_trade(
-            "Trade already completed today."
-        )
-
+    if s3_utils.has_trade_today():
+        logger.info("Gate 2 FAILED: trade already recorded today — stopping.")
+        tg.notify_no_trade("A trade was already taken today.")
         return
-
-    
-   
 
     logger.info("Gate 2 PASSED: no trade recorded today.")
 

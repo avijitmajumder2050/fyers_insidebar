@@ -129,6 +129,23 @@ def has_trade_today() -> bool:
     ]
     return not active.empty
 
+def get_today_trade():
+    journal = _load_journal()
+
+    if journal.empty:
+        return None
+
+    today = date.today().isoformat()
+
+    rows = journal[
+        journal["trade_date"].astype(str).str.strip() == today
+    ]
+
+    if rows.empty:
+        return None
+
+    return rows.iloc[-1].to_dict()
+
 
 def create_trade(record: dict) -> None:
     """

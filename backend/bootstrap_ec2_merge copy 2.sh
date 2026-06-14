@@ -67,115 +67,6 @@ done
 
 echo "✅ Elastic IP attached (or already associated)"
 sleep 10
-# =============================================================
-# 3. CONFIGURE REVERSE PROXY LAYER (NGINX GATEWAY ON PORT 80)
-# =============================================================
-# ============================================================
-# INSTALL NGINX
-# ============================================================
-
-echo "Installing nginx..."
-
-sudo amazon-linux-extras install nginx1 -y || true
-sudo yum install -y nginx
-
-sudo systemctl enable nginx
-
-# ============================================================
-# REMOVE AMAZON LINUX DEFAULT NGINX SITE
-# ============================================================
-
-echo "Removing default nginx server..."
-
-sudo cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
-
-sudo tee /etc/nginx/nginx.conf >/dev/null <<'EOF'
-user nginx;
-worker_processes auto;
-error_log /var/log/nginx/error.log;
-pid /run/nginx.pid;
-
-events {
-    worker_connections 1024;
-}
-
-http {
-
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
-
-    access_log /var/log/nginx/access.log main;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-
-    keepalive_timeout 65;
-
-    types_hash_max_size 4096;
-
-    include /etc/nginx/conf.d/*.conf;
-}
-EOF
-
-echo "✅ Default nginx config removed"
-
-# ============================================================
-# NGINX REVERSE PROXY
-# ============================================================
-
-echo "Creating routing config..."
-
-sudo tee /etc/nginx/conf.d/momentum.conf >/dev/null <<'EOF'
-server {
-
-    listen 80 default_server;
-    server_name _;
-
-    client_max_body_size 100M;
-
-    # --------------------------------------------------
-    # CHARTMAZA -> PORT 5001
-    # --------------------------------------------------
-    location /api/tradingview/ {
-
-        proxy_pass http://127.0.0.1:5001;
-
-        proxy_http_version 1.1;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # --------------------------------------------------
-    # MOMENTUM -> PORT 5000
-    # --------------------------------------------------
-    location / {
-
-        proxy_pass http://127.0.0.1:5000;
-
-        proxy_http_version 1.1;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-
-sudo nginx -t
-sudo systemctl restart nginx
-
-echo "✅ Nginx routing configured"
-
-
 
 /usr/bin/python3.11 --version
 python3 --version
@@ -501,12 +392,93 @@ touch "$LOG_FILE"
 chown ec2-user:ec2-user "$LOG_FILE"
 chmod 664 "$LOG_FILE"
 
+cat > /home/ec2-user/docker_log_capture.sh << 'EOF'
+#!/bin/bash
+
+CONTAINER_NAME="insidebar-strategy"
+LOG_FILE="/var/log/fyers_insidebar.log"
+
+mkdir -p /var/log
+
+while true
+do
+  docker logs --timestamps "$CONTAINER_NAME" >> "$LOG_FILE" 2>&1
+  sleep 5
+done
+EOF
+
+chmod +x /home/ec2-user/docker_log_capture.sh
+
+# -------------------------------------------------------------
+# SYSTEMD: LOG CAPTURE SERVICE
+# -------------------------------------------------------------
+cat > /etc/systemd/system/fyers-docker-logs.service << 'EOF'
+[Unit]
+Description=Docker Log Capture Service
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+ExecStart=/bin/bash /home/ec2-user/docker_log_capture.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# -------------------------------------------------------------
+# S3 LOG SYNC SERVICE
+# -------------------------------------------------------------
+cat > /home/ec2-user/log_sync.sh << 'EOF'
+#!/bin/bash
+
+LOG_FILE="/var/log/fyers_insidebar.log"
+S3_BUCKET="s3://dhan-trading-data/trading-bot/logs"
+
+while true
+do
+  if [ -f "$LOG_FILE" ]; then
+    TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+
+    aws s3 cp "$LOG_FILE" \
+      "$S3_BUCKET/fyers_insidebar.log"
+  fi
+
+  sleep 300
+done
+EOF
+
+chmod +x /home/ec2-user/log_sync.sh
+
+cat > /etc/systemd/system/fyers-log-sync.service << 'EOF'
+[Unit]
+Description=S3 Log Sync Service
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+ExecStart=/bin/bash /home/ec2-user/log_sync.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # -------------------------------------------------------------
 # ENABLE SERVICES
 # -------------------------------------------------------------
 systemctl daemon-reload
 
+systemctl enable fyers-docker-logs.service
+systemctl enable fyers-log-sync.service
 
+systemctl restart fyers-docker-logs.service
+systemctl restart fyers-log-sync.service
 
 echo "================================================"
 echo "  FYERS INSTALLATION COMPLETE"
