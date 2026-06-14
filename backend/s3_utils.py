@@ -135,10 +135,15 @@ def get_today_trade():
     if journal.empty:
         return None
 
-    today = date.today().isoformat()
+    journal["trade_date"] = pd.to_datetime(
+        journal["trade_date"],
+        errors="coerce"
+    ).dt.date
+
+    today = date.today()
 
     rows = journal[
-        journal["trade_date"].astype(str).str.strip() == today
+        journal["trade_date"] == today
     ]
 
     if rows.empty:
