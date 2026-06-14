@@ -35,6 +35,7 @@ SSM_APP_ID    = "/fyers/APP_ID"      # ABCDE
 # ─────────────────────────────────────────────────────────────
 MARKET_INDEX_SYMBOL    = "NSE:NIFTYMIDSML400-INDEX"
 MARKET_MIN_CHANGE_PTS  = 30     # NIFTYMIDSML400 must be up >= +50 pts
+S3_LOG_KEY = "trading-bot/logs/fyers_insidebar.log"
 
 # ─────────────────────────────────────────────────────────────
 # STRATEGY CONSTANTS
