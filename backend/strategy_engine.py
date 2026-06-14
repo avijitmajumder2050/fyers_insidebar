@@ -23,7 +23,7 @@ import time
 import os
 import json
 
-from autologin import fyers , 
+from autologin import fyers
 import s3_utils
 import telegram_notifier as tg
 from config import (
