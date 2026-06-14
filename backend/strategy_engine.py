@@ -23,7 +23,7 @@ import time
 import os
 import json
 
-from autologin import fyers
+from autologin import fyers , 
 import s3_utils
 import telegram_notifier as tg
 from config import (
@@ -436,4 +436,5 @@ def run_strategy_forever():
 # Entry point
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    run_strategy_forever()
+     setup_logging()        # step 1 — S3 + console log handler ready
+     run_strategy_forever()
