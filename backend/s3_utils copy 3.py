@@ -97,30 +97,21 @@ def load_today_candidates() -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────
 
 def _load_journal() -> pd.DataFrame:
+    """Load journal from S3; return empty frame if file doesn't exist yet."""
     try:
         df = _read_csv(S3_TRADE_JOURNAL)
-
         df.columns = df.columns.str.strip().str.lower()
-
+        # Ensure all expected columns exist
         for col in JOURNAL_COLUMNS:
             if col not in df.columns:
                 df[col] = ""
-
-        # normalize date format
-        if "trade_date" in df.columns:
-            df["trade_date"] = pd.to_datetime(
-                df["trade_date"],
-                errors="coerce"
-            ).dt.date
-
         return df[JOURNAL_COLUMNS]
-
-    except Exception as exc:
-        logger.warning(
-            "Journal load failed (%s) — starting empty.",
-            exc
-        )
+    except _s3.exceptions.NoSuchKey:
         return pd.DataFrame(columns=JOURNAL_COLUMNS)
+    except Exception as exc:
+        logger.warning("Journal load failed (%s) — starting with empty journal.", exc)
+        return pd.DataFrame(columns=JOURNAL_COLUMNS)
+
 
 def has_trade_today() -> bool:
     """
@@ -167,16 +158,16 @@ def create_trade(record: dict) -> None:
     Raises if a trade for this symbol+date already exists.
     """
     journal = _load_journal()
-    today = date.today()
+    today   = date.today().isoformat()
     symbol  = record["symbol"]
 
     exists = (
-    not journal.empty
-    and any(
-        (journal["trade_date"] == today)
-        & (journal["symbol"] == symbol)
+        not journal.empty
+        and any(
+            (journal["trade_date"].astype(str) == today)
+            & (journal["symbol"] == symbol)
+        )
     )
-)
     if exists:
         logger.warning("Duplicate trade detected for %s on %s — skipping insert.", symbol, today)
         return
@@ -188,37 +179,23 @@ def create_trade(record: dict) -> None:
 
 
 def update_trade(symbol: str, updates: dict) -> None:
+    """
+    Update an existing today's trade row in-place.
+    Used for OPEN→ACTIVE transitions and partial exit tracking.
+    """
     journal = _load_journal()
-
-    if journal.empty:
-        logger.error("Journal empty.")
-        return
-
-    today = date.today()
-
-    mask = (
-        (journal["trade_date"] == today)
-        & (journal["symbol"].astype(str).str.strip() == symbol)
+    today   = date.today().isoformat()
+    mask    = (
+        (journal["trade_date"].astype(str) == today)
+        & (journal["symbol"] == symbol)
     )
-
     if not mask.any():
-        logger.error(
-            "update_trade: no row found for %s on %s",
-            symbol,
-            today
-        )
+        logger.error("update_trade: no row found for %s on %s.", symbol, today)
         return
-
     for col, val in updates.items():
         journal.loc[mask, col] = val
-
     _write_csv(journal, S3_TRADE_JOURNAL)
-
-    logger.info(
-        "Journal updated %s -> %s",
-        symbol,
-        updates
-    )
+    logger.info("Journal: updated %s → %s", symbol, updates)
 
 
 def close_trade(symbol: str, exit_price: float, pnl: float, rr_achieved: str) -> None:
