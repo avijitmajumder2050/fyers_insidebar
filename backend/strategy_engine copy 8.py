@@ -34,7 +34,7 @@ from config import (
     EXCHANGE_PREFIX, SYMBOL_SUFFIX,
     STATUS_OPEN,
 )
-from trade_manager import TradeState, run_trade_manager, SIGNAL_REENTRY
+from trade_manager import TradeState, run_trade_manager
 from s3_log_handler import setup_logging
 
 
@@ -443,86 +443,16 @@ def run_strategy() -> None:
         # ── e. Hand off to trade manager ──────────────────────
         # SL is SOFTWARE-MANAGED inside trade_manager.
         # No exchange-side SL-M order is placed.
-        # trade_manager returns SIGNAL_REENTRY if the initial
-        # (untrailed) SL is hit on the first entry — we then
-        # re-enter once with same symbol + same CSV SL.
+        # trade_manager polls LTP every 5 s and fires a
+        # MARKET SELL when ltp <= current_sl (initial or trailed).
         state = TradeState(
             symbol=sym,
             display_symbol=raw,
             entry_price=entry_price,
             sl_price=csv_sl,
             initial_qty=qty,
-            is_reentry=False,
         )
-        signal = run_trade_manager(state)
-
-        # ── f. Re-entry (max 1 attempt) ────────────────────────
-        if signal == SIGNAL_REENTRY:
-            logger.info("Re-entry triggered for %s — fetching fresh LTP …", raw)
-            try:
-                reentry_quotes  = _batch_quotes([sym])
-                reentry_ltp     = reentry_quotes.get(sym, {}).get("lp")
-
-                if not reentry_ltp:
-                    raise ValueError("No LTP returned for re-entry.")
-
-                reentry_sl_pct = _calc_sl_pct(reentry_ltp, csv_sl)
-                if reentry_sl_pct > MAX_SL_PCT:
-                    raise ValueError(
-                        f"Re-entry SL% {reentry_sl_pct:.2f}% > max {MAX_SL_PCT}% — skipping."
-                    )
-
-                reentry_qty = _calc_qty(reentry_ltp, csv_sl, capital)
-                if reentry_qty <= 0:
-                    raise ValueError("Re-entry qty = 0 — insufficient funds.")
-
-                logger.info(
-                    "Re-entry: %s | LTP=₹%.2f | SL=₹%.2f | SL%%=%.2f | qty=%d",
-                    raw, reentry_ltp, csv_sl, reentry_sl_pct, reentry_qty,
-                )
-                tg.send(
-                    f"🔁 <b>RE-ENTRY</b> — {raw}\n"
-                    f"LTP : ₹{reentry_ltp:.2f}\n"
-                    f"SL  : ₹{csv_sl:.2f}  ({reentry_sl_pct:.2f}%)\n"
-                    f"Qty : {reentry_qty}"
-                )
-
-                reentry_order_id    = _place_market_buy(sym, reentry_qty)
-                reentry_entry_price = _await_fill(reentry_order_id)
-
-                logger.info(
-                    "RE-ENTRY FILLED: %s @ ₹%.2f  qty=%d",
-                    raw, reentry_entry_price, reentry_qty,
-                )
-                tg.notify_trade_entry(raw, reentry_entry_price, csv_sl, reentry_qty, reentry_sl_pct)
-
-                # Journal: separate row with _RE suffix so both entries are tracked
-                s3_utils.create_trade({
-                    "trade_date":  date.today().isoformat(),
-                    "symbol":      raw + "_RE",
-                    "entry_price": reentry_entry_price,
-                    "sl_price":    csv_sl,
-                    "qty":         reentry_qty,
-                    "exit_price":  "",
-                    "pnl":         "",
-                    "rr_achieved": "0R",
-                    "status":      STATUS_OPEN,
-                })
-
-                reentry_state = TradeState(
-                    symbol=sym,
-                    display_symbol=raw,
-                    entry_price=reentry_entry_price,
-                    sl_price=csv_sl,
-                    initial_qty=reentry_qty,
-                    is_reentry=True,   # blocks any further re-entry
-                )
-                run_trade_manager(reentry_state)
-                logger.info("Re-entry trade complete for %s.", raw)
-
-            except Exception as exc:
-                logger.error("Re-entry failed for %s: %s — no further attempt.", raw, exc)
-                tg.send(f"⚠️ <b>RE-ENTRY FAILED</b> — {raw}\nReason: {exc}")
+        run_trade_manager(state)
 
         logger.info("Session complete — trade closed for %s.", raw)
         return "TRADE_COMPLETED"  # ONE trade per day — hard stop after success
