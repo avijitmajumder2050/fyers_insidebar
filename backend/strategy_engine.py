@@ -302,7 +302,7 @@ def run_strategy() -> None:
             "Trade already completed today."
         )
 
-        return
+        return "DAY_FINISHED"
 
     
    
@@ -470,16 +470,17 @@ def run_strategy_forever():
         try:
             result = run_strategy()
 
-            if result == "TRADE_COMPLETED":
+            if result in ["TRADE_COMPLETED", "DAY_FINISHED"]:
                 logger.info(
                     "One-trade-per-day completed. Stopping."
                 )
-                return
+                break
 
         except Exception as e:
             logger.error("Strategy crashed: %s", e)
 
         time.sleep(60)
+    logger.info("Exited while loop")
 # ─────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────
