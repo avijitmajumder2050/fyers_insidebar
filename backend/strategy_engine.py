@@ -474,7 +474,7 @@ def run_strategy_forever():
                 logger.info(
                     "One-trade-per-day completed. Stopping."
                 )
-                time.sleep(300)   # 5 minutes
+                time.sleep(1800)   # 30 minutes
                 continue
 
         except Exception as e:
