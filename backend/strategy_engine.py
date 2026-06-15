@@ -474,7 +474,7 @@ def run_strategy_forever():
                 logger.info(
                     "One-trade-per-day completed. Stopping."
                 )
-                break
+                return
 
         except Exception as e:
             logger.error("Strategy crashed: %s", e)
