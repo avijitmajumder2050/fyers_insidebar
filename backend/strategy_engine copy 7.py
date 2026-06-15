@@ -429,7 +429,6 @@ def run_strategy() -> None:
         # ── d. Write OPEN record to S3 journal ────────────────
         s3_utils.create_trade({
             "trade_date":  date.today().isoformat(),
-            "trade_date":  date.today().isoformat(),
             "symbol":      raw,
             "entry_price": entry_price,
             "sl_price":    csv_sl,
@@ -455,7 +454,7 @@ def run_strategy() -> None:
         run_trade_manager(state)
 
         logger.info("Session complete — trade closed for %s.", raw)
-        return "TRADE_COMPLETED"  # ONE trade per day — hard stop after success
+        return   # ONE trade per day — hard stop after success
 
     # All candidates exhausted without a single entry
     logger.info("All candidates exhausted — no trade placed today.")
@@ -465,20 +464,13 @@ def run_strategy() -> None:
 
 def run_strategy_forever():
     notify_start_once()
-
     while True:
         try:
-            result = run_strategy()
-
-            if result == "TRADE_COMPLETED":
-                logger.info(
-                    "One-trade-per-day completed. Stopping."
-                )
-                return
-
+            run_strategy()
         except Exception as e:
             logger.error("Strategy crashed: %s", e)
 
+        # sleep before next scan
         time.sleep(60)
 # ─────────────────────────────────────────────────────────────
 # Entry point
