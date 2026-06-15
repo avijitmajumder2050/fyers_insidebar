@@ -302,7 +302,7 @@ def run_strategy() -> None:
             "Trade already completed today."
         )
 
-        return "DAY_FINISHED"
+            return "DAY_FINISHED"
 
     
    
