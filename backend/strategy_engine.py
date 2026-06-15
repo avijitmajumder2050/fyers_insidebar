@@ -86,6 +86,59 @@ def _get_available_capital() -> float:
     return AVAILABLE_FUND_INR
 
 
+def _handle_reentry(today_trade, capital):
+    raw = today_trade["symbol"]
+
+    sym = to_fyers_symbol(raw)
+
+    original_entry = float(today_trade["entry_price"])
+    csv_sl         = float(today_trade["sl_price"])
+
+    logger.info(
+        "REENTRY MODE | %s | trigger > %.2f",
+        raw,
+        original_entry
+    )
+
+    while True:
+
+        quote = _batch_quotes([sym])
+
+        ltp = quote.get(sym, {}).get("lp")
+
+        if ltp and ltp > original_entry:
+            logger.info(
+                "REENTRY BREAKOUT | %s | %.2f > %.2f",
+                raw,
+                ltp,
+                original_entry
+            )
+
+            qty = _calc_qty(
+                ltp,
+                csv_sl,
+                capital
+            )
+
+            order_id = _place_market_buy(
+                sym,
+                qty
+            )
+
+            fill = _await_fill(order_id)
+
+            state = TradeState(
+                symbol=sym,
+                display_symbol=raw,
+                entry_price=fill,
+                sl_price=csv_sl,
+                initial_qty=qty,
+                is_reentry=True
+            )
+
+            return run_trade_manager(state)
+
+        time.sleep(10)
 # ─────────────────────────────────────────────────────────────
 # Symbol conversion
 # ─────────────────────────────────────────────────────────────
@@ -310,7 +363,12 @@ def run_strategy() -> None:
         elif status == "SL_HIT":
             logger.info("Initial trade hit SL earlier. Resuming strategy to check for breakout re-entry.")
             # Let it drop past this gate to execute the re-entry polling block!
-            today_trade = None   # force fresh scan
+            #today_trade = None   # force fresh scan
+            capital = _get_available_capital()
+            return _handle_reentry(
+        today_trade,
+        capital
+    )
              # -----------------------------------
 
     
