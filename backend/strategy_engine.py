@@ -126,6 +126,18 @@ def _handle_reentry(today_trade, capital):
             )
 
             fill = _await_fill(order_id)
+            s3_utils.update_trade(
+    raw,
+    {
+        "entry_price": fill,
+        "sl_price": csv_sl,
+        "qty": qty,
+        "status": STATUS_OPEN,
+        "rr_achieved": "0R",
+        "exit_price": "",
+        "pnl": ""
+    }
+)
 
             state = TradeState(
                 symbol=sym,
@@ -494,18 +506,18 @@ def run_strategy() -> None:
         #tg.notify_trade_entry(raw, entry_price, csv_sl, qty, sl_pct)
 
         # ── d. Write OPEN record to S3 journal ────────────────
-        s3_utils.create_trade({
-            "trade_date":  date.today().isoformat(),
-            "trade_date":  date.today().isoformat(),
-            "symbol":      raw,
-            "entry_price": entry_price,
-            "sl_price":    csv_sl,
-            "qty":         qty,
-            "exit_price":  "",
-            "pnl":         "",
-            "rr_achieved": "0R",
-            "status":      STATUS_OPEN,
-        })
+        s3_utils.update_trade(
+    raw,
+    {
+        "entry_price": reentry_entry_price,
+        "sl_price": csv_sl,
+        "qty": reentry_qty,
+        "exit_price": "",
+        "pnl": "",
+        "rr_achieved": "0R",
+        "status": STATUS_OPEN,
+    }
+)
 
         # ── e. Hand off to trade manager ──────────────────────
         # SL is SOFTWARE-MANAGED inside trade_manager.
@@ -587,9 +599,8 @@ def run_strategy() -> None:
                     tg.notify_trade_entry(raw, reentry_entry_price, csv_sl, reentry_qty, reentry_sl_pct)
 
                     # Create individual log entry suffix tracking for the secondary instance
-                    s3_utils.create_trade({
-                        "trade_date":  date.today().isoformat(),
-                        "symbol":      raw + "_RE",
+                    s3_utils.update_trade({
+                        "symbol":      raw ,
                         "entry_price": reentry_entry_price,
                         "sl_price":    csv_sl,
                         "qty":         reentry_qty,
