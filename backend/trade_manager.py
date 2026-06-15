@@ -252,35 +252,21 @@ def run_trade_manager(state: TradeState) -> str:
                 time.sleep(POLL_INTERVAL_SEC)
                 continue
 
-            _close_trade(
-                state,
-                fill,
-                state.rr_achieved or "0R",
-                f"SL hit at ₹{state.current_sl:.2f}",
-            )
-
-            # ── Re-entry decision ─────────────────────────────
-            # Only re-enter if:
-            #   • SL was NEVER trailed (still at initial CSV SL price)
-            #   • This is NOT already a re-entry trade (max 1 re-entry)
+             # 🔥 CASE 1: FIRST ENTRY SL HIT → allow re-entry
             if not state.sl_trailed and not state.is_reentry:
-                logger.info(
-                    "Initial SL hit on first entry — signalling RE-ENTRY for %s",
-                    state.display_symbol,
-                )
-                tg.send(
-                    f"🔁 <b>RE-ENTRY SIGNAL</b> — {state.display_symbol}\n"
-                    f"Initial SL hit at ₹{state.current_sl:.2f}\n"
-                    f"Attempting re-entry with same parameters…"
-                )
+                s3_utils.update_trade(state.display_symbol, {
+                "exit_price": fill,
+                "status": "SL_HIT",
+                "rr_achieved": "0R"
+                })
+                logger.info("Initial SL hit on first entry — signalling RE-ENTRY validation.")
                 return SIGNAL_REENTRY
-            else:
-                reason = "already a re-entry" if state.is_reentry else "SL was trailed"
-                logger.info(
-                    "No re-entry for %s (%s).",
-                    state.display_symbol, reason,
-                )
-                return SIGNAL_DONE
+            
+            # 🔥 CASE 2: TRAILED SL OR REENTRY SL → FINAL EXIT
+            _close_trade(state, fill, state.rr_achieved or "0R", "SL hit")
+            return SIGNAL_DONE
+
+           
 
         # ── 4. R-level target checks ──────────────────────────
         for r_mult, book_frac, move_sl_to in TRAIL_LEVELS:

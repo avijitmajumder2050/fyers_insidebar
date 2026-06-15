@@ -290,10 +290,12 @@ def run_strategy() -> None:
             "Trade manager completed existing trade."
         )
              return
-         # -----------------------------------
+        
+       
+             
     # CLOSED → One trade already done
     # -----------------------------------
-        if status == "CLOSED":
+        elif status == "CLOSED":
             logger.info(
             "Trade already completed today. Stopping."
         )
@@ -303,6 +305,13 @@ def run_strategy() -> None:
         )
 
             return "DAY_FINISHED"
+        
+         # ── ADD THIS NEW CONDITION ──
+        elif status == "SL_HIT":
+            logger.info("Initial trade hit SL earlier. Resuming strategy to check for breakout re-entry.")
+            # Let it drop past this gate to execute the re-entry polling block!
+            today_trade = None   # force fresh scan
+             # -----------------------------------
 
     
    
@@ -458,74 +467,99 @@ def run_strategy() -> None:
 
         # ── f. Re-entry (max 1 attempt) ────────────────────────
         if signal == SIGNAL_REENTRY:
-            logger.info("Re-entry triggered for %s — fetching fresh LTP …", raw)
-            try:
-                reentry_quotes  = _batch_quotes([sym])
-                reentry_ltp     = reentry_quotes.get(sym, {}).get("lp")
+            logger.info("Re-entry triggered for %s. Monitoring until LTP > original entry (₹%.2f)...", raw, entry_price)
+            
+            original_entry_trigger = entry_price
+            reentry_triggered = False
+            
+            # Continuous polling loop for breakout validation
+            while True:
+                try:
+                    reentry_quotes = _batch_quotes([sym])
+                    reentry_ltp = reentry_quotes.get(sym, {}).get("lp")
+                    
+                    if not reentry_ltp:
+                        logger.warning("Failed to receive live quote for re-entry validation. Retrying...")
+                        time.sleep(10)
+                        continue
+                    
+                    logger.info("Re-entry Track | %s | Live LTP: ₹%.2f | Re-entry Threshold: > ₹%.2f", raw, reentry_ltp, original_entry_trigger)
+                    
+                    # Validating the strategy condition: LTP > original entry price
+                    if reentry_ltp > original_entry_trigger:
+                        logger.info("🚀 Strategy condition met! LTP (₹%.2f) broken above original entry (₹%.2f)", reentry_ltp, original_entry_trigger)
+                        reentry_triggered = True
+                        break
+                        
+                except Exception as poll_exc:
+                    logger.error("Error monitoring real-time quote for re-entry: %s", poll_exc)
+                
+                time.sleep(10)  # Sleep for 10 seconds between checks to conserve rate limits
+            
+            if reentry_triggered:
+                try:
+                    # Refresh quotes to perform immediate sizing parameters
+                    final_quotes = _batch_quotes([sym])
+                    final_ltp = final_quotes.get(sym, {}).get("lp") or reentry_ltp
 
-                if not reentry_ltp:
-                    raise ValueError("No LTP returned for re-entry.")
+                    reentry_sl_pct = _calc_sl_pct(final_ltp, csv_sl)
+                    if reentry_sl_pct > MAX_SL_PCT:
+                        raise ValueError(f"Re-entry SL% {reentry_sl_pct:.2f}% > max structural limit {MAX_SL_PCT}%")
 
-                reentry_sl_pct = _calc_sl_pct(reentry_ltp, csv_sl)
-                if reentry_sl_pct > MAX_SL_PCT:
-                    raise ValueError(
-                        f"Re-entry SL% {reentry_sl_pct:.2f}% > max {MAX_SL_PCT}% — skipping."
+                    reentry_qty = _calc_qty(final_ltp, csv_sl, capital)
+                    if reentry_qty <= 0:
+                        raise ValueError("Calculated re-entry quantity yielded 0. Insufficient funds.")
+
+                    logger.info(
+                        "Executing Re-entry: %s | LTP=₹%.2f | Initial SL=₹%.2f | SL%%=%.2f | Qty=%d",
+                        raw, final_ltp, csv_sl, reentry_sl_pct, reentry_qty,
+                    )
+                    
+                    tg.send(
+                        f"🔁 <b>VALIDATED RE-ENTRY BREAKOUT</b> — {raw}\n"
+                        f"Triggered LTP : ₹{final_ltp:.2f}\n"
+                        f"Initial SL    : ₹{csv_sl:.2f} ({reentry_sl_pct:.2f}%)\n"
+                        f"Qty           : {reentry_qty}"
                     )
 
-                reentry_qty = _calc_qty(reentry_ltp, csv_sl, capital)
-                if reentry_qty <= 0:
-                    raise ValueError("Re-entry qty = 0 — insufficient funds.")
+                    reentry_order_id = _place_market_buy(sym, reentry_qty)
+                    reentry_entry_price = _await_fill(reentry_order_id)
 
-                logger.info(
-                    "Re-entry: %s | LTP=₹%.2f | SL=₹%.2f | SL%%=%.2f | qty=%d",
-                    raw, reentry_ltp, csv_sl, reentry_sl_pct, reentry_qty,
-                )
-                tg.send(
-                    f"🔁 <b>RE-ENTRY</b> — {raw}\n"
-                    f"LTP : ₹{reentry_ltp:.2f}\n"
-                    f"SL  : ₹{csv_sl:.2f}  ({reentry_sl_pct:.2f}%)\n"
-                    f"Qty : {reentry_qty}"
-                )
+                    logger.info("RE-ENTRY FILLED SUCCESSFULLY: %s @ ₹%.2f qty=%d", raw, reentry_entry_price, reentry_qty)
+                    tg.notify_trade_entry(raw, reentry_entry_price, csv_sl, reentry_qty, reentry_sl_pct)
 
-                reentry_order_id    = _place_market_buy(sym, reentry_qty)
-                reentry_entry_price = _await_fill(reentry_order_id)
+                    # Create individual log entry suffix tracking for the secondary instance
+                    s3_utils.create_trade({
+                        "trade_date":  date.today().isoformat(),
+                        "symbol":      raw + "_RE",
+                        "entry_price": reentry_entry_price,
+                        "sl_price":    csv_sl,
+                        "qty":         reentry_qty,
+                        "exit_price":  "",
+                        "pnl":         "",
+                        "rr_achieved": "0R",
+                        "status":      STATUS_OPEN,
+                    })
 
-                logger.info(
-                    "RE-ENTRY FILLED: %s @ ₹%.2f  qty=%d",
-                    raw, reentry_entry_price, reentry_qty,
-                )
-                tg.notify_trade_entry(raw, reentry_entry_price, csv_sl, reentry_qty, reentry_sl_pct)
+                    reentry_state = TradeState(
+                        symbol=sym,
+                        display_symbol=raw,
+                        entry_price=reentry_entry_price,
+                        sl_price=csv_sl,
+                        initial_qty=reentry_qty,
+                        is_reentry=True,   # Explicit flag safely locks engine from infinitely repeating
+                    )
+                    run_trade_manager(reentry_state)
+                    logger.info("Re-entry lifecycle trade workflow completed for %s.", raw)
 
-                # Journal: separate row with _RE suffix so both entries are tracked
-                s3_utils.create_trade({
-                    "trade_date":  date.today().isoformat(),
-                    "symbol":      raw + "_RE",
-                    "entry_price": reentry_entry_price,
-                    "sl_price":    csv_sl,
-                    "qty":         reentry_qty,
-                    "exit_price":  "",
-                    "pnl":         "",
-                    "rr_achieved": "0R",
-                    "status":      STATUS_OPEN,
-                })
-
-                reentry_state = TradeState(
-                    symbol=sym,
-                    display_symbol=raw,
-                    entry_price=reentry_entry_price,
-                    sl_price=csv_sl,
-                    initial_qty=reentry_qty,
-                    is_reentry=True,   # blocks any further re-entry
-                )
-                run_trade_manager(reentry_state)
-                logger.info("Re-entry trade complete for %s.", raw)
-
-            except Exception as exc:
-                logger.error("Re-entry failed for %s: %s — no further attempt.", raw, exc)
-                tg.send(f"⚠️ <b>RE-ENTRY FAILED</b> — {raw}\nReason: {exc}")
+                except Exception as exc:
+                    logger.error("Execution failed during setup of verified re-entry for %s: %s", raw, exc)
+                    tg.send(f"⚠️ <b>RE-ENTRY EXECUTION FAILED</b> — {raw}\nReason: {exc}")
 
         logger.info("Session complete — trade closed for %s.", raw)
-        return "TRADE_COMPLETED"  # ONE trade per day — hard stop after success
+        return "TRADE_COMPLETED"
+
+   
 
     # All candidates exhausted without a single entry
     logger.info("All candidates exhausted — no trade placed today.")
@@ -539,6 +573,9 @@ def run_strategy_forever():
     while True:
         try:
             result = run_strategy()
+            if result == SIGNAL_REENTRY:
+                logger.info("Re-entry signal received — restarting immediately")
+                continue
 
             if result in ["TRADE_COMPLETED", "DAY_FINISHED"]:
                 logger.info(
