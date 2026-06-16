@@ -506,18 +506,17 @@ def run_strategy() -> None:
         #tg.notify_trade_entry(raw, entry_price, csv_sl, qty, sl_pct)
 
         # ── d. Write OPEN record to S3 journal ────────────────
-        s3_utils.update_trade(
-    raw,
-    {
-        "entry_price": entry_price,
-        "sl_price": csv_sl,
-        "qty": qty,
-        "exit_price": "",
-        "pnl": "",
-        "rr_achieved": "0R",
-        "status": STATUS_OPEN,
-    }
-)
+        s3_utils.create_trade({
+    "trade_date": date.today().isoformat(),
+    "symbol": raw,
+    "entry_price": entry_price,
+    "sl_price": csv_sl,
+    "qty": qty,
+    "exit_price": "",
+    "pnl": "",
+    "rr_achieved": "0R",
+    "status": STATUS_OPEN,
+})
 
         # ── e. Hand off to trade manager ──────────────────────
         # SL is SOFTWARE-MANAGED inside trade_manager.
