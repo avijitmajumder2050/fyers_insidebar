@@ -509,9 +509,9 @@ def run_strategy() -> None:
         s3_utils.update_trade(
     raw,
     {
-        "entry_price": reentry_entry_price,
+        "entry_price": entry_price,
         "sl_price": csv_sl,
-        "qty": reentry_qty,
+        "qty": qty,
         "exit_price": "",
         "pnl": "",
         "rr_achieved": "0R",
