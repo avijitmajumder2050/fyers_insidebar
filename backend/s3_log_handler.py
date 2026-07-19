@@ -25,11 +25,13 @@ import threading
 import time
 
 import boto3
-
+from config import (
+    AWS_REGION, S3_BUCKET
+)
 # ─────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────
-S3_BUCKET          = "dhan-trading-data"
+
 S3_LOG_KEY         = "trading-bot/logs/fyers_insidebar.log"
 AWS_REGION         = "ap-south-1"
 FLUSH_INTERVAL_SEC = 60        # background flush every 60 s
