@@ -6,13 +6,12 @@ Data:  S3 (ONLY for trade data — CSV, journal)
 """
 
 import boto3
-from aws_s3 import S3_BUCKET as ACTIVE_S3_BUCKET
 
 # ─────────────────────────────────────────────────────────────
 # AWS
 # ─────────────────────────────────────────────────────────────
 AWS_REGION = "ap-south-1"
-S3_BUCKET = ACTIVE_S3_BUCKET
+S3_BUCKET  = "dhan-trading-data"
 AVAILABLE_FUND_INR = 10000
 
 # S3 paths — trade data only, NO auth data here
