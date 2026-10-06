@@ -30,12 +30,12 @@ import telegram_notifier as tg
 from config import (
     MARKET_INDEX_SYMBOL, MARKET_MIN_CHANGE_PTS,
     AVAILABLE_FUND_INR, LEVERAGE, MARGIN_SAFETY, ACCOUNT_RISK_INR,
-    MAX_SL_PCT, PRODUCT_TYPE,
-    ORDER_TYPE_MARKET, ORDER_SIDE_BUY,
+    MAX_SL_PCT, MAX_CHASE_R, SKIP_CIRCUIT_BAND_PCT, PRODUCT_TYPE,
+    ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, ORDER_SIDE_BUY,
     EXCHANGE_PREFIX, SYMBOL_SUFFIX,
-    STATUS_OPEN,
+    STATUS_OPEN, STATUS_CLOSED,
 )
-from trade_manager import TradeState, run_trade_manager, SIGNAL_REENTRY
+from trade_manager import TradeState, run_trade_manager, SIGNAL_REENTRY, get_net_position_qty
 from s3_log_handler import setup_logging
 
 
@@ -70,6 +70,21 @@ def _batch_quotes(symbols: list[str]) -> dict[str, dict]:
                 "chp": float(v.get("chp", 0)),
             }
     return result
+
+
+def _circuit_band_pct(symbol: str) -> float | None:
+    """
+    NSE price band % from Fyers depth (upper/lower circuit are prev_close ± band).
+    Returns None if unavailable.
+    """
+    try:
+        resp = fyers.depth(data={"symbol": symbol, "ohlcv_flag": "1"})
+        d = resp.get("d", {}).get(symbol, {})
+        upper, lower = float(d["upper_ckt"]), float(d["lower_ckt"])
+        return round((upper - lower) / (upper + lower) * 100, 1)
+    except Exception as exc:
+        logger.warning("Circuit band lookup failed for %s (%s).", symbol, exc)
+        return None
 
 
 def _get_available_capital() -> float:
@@ -193,13 +208,13 @@ def _blocked_reason(raw: str) -> str | None:
     return _blocked_today.get(raw)
 
 
-def _place_buy_with_margin_retry(symbol: str, qty: int) -> tuple[str, int]:
+def _place_buy_with_margin_retry(symbol: str, qty: int, limit_price: float) -> tuple[str, int]:
     """
-    Place MARKET BUY; on 'Margin Shortfall' rejection, shrink qty to fit the
+    Place IOC LIMIT BUY; on 'Margin Shortfall' rejection, shrink qty to fit the
     margin Fyers reports as available and retry once. Returns (order_id, qty).
     """
     try:
-        return _place_market_buy(symbol, qty), qty
+        return _place_limit_buy_ioc(symbol, qty, limit_price), qty
     except RuntimeError as exc:
         m = re.search(r"Margin Shortfall:INR ([\d,.]+) Available:INR ([\d,.]+)", str(exc))
         if not m:
@@ -212,7 +227,7 @@ def _place_buy_with_margin_retry(symbol: str, qty: int) -> tuple[str, int]:
             "Margin shortfall ₹%.2f on %s qty=%d — retrying with qty=%d",
             shortfall, symbol, qty, new_qty,
         )
-        return _place_market_buy(symbol, new_qty), new_qty
+        return _place_limit_buy_ioc(symbol, new_qty, limit_price), new_qty
 
 
 # ─────────────────────────────────────────────────────────────
@@ -257,6 +272,63 @@ def _place_market_buy(symbol: str, qty: int) -> str:
     )
 
     return resp["id"]
+
+def _place_limit_buy_ioc(symbol: str, qty: int, limit_price: float) -> str:
+    """
+    LIMIT BUY INTRADAY with IOC validity: fills immediately at <= limit_price,
+    any unfilled part is cancelled by the exchange — the fill can never be
+    above the breakout window. Returns order_id.
+    """
+    payload = {
+        "symbol": symbol,
+        "qty": qty,
+        "type": ORDER_TYPE_LIMIT,
+        "side": ORDER_SIDE_BUY,
+        "productType": PRODUCT_TYPE,
+        "limitPrice": limit_price,
+        "stopPrice": 0,
+        "validity": "IOC",
+        "disclosedQty": 0,
+        "offlineOrder": False,
+    }
+    logger.info("FYERS ORDER REQUEST:\n%s", json.dumps(payload, indent=2))
+    resp = fyers.place_order(data=payload)
+    logger.info("FYERS ORDER RESPONSE:\n%s", json.dumps(resp, indent=2))
+    if resp.get("s") != "ok":
+        raise RuntimeError(f"Buy order rejected: {resp}")
+    logger.info("BUY placed: %s qty=%d limit=₹%.2f IOC id=%s", symbol, qty, limit_price, resp["id"])
+    return resp["id"]
+
+
+def _await_buy_fill(order_id: str) -> tuple[float, int]:
+    """
+    Poll orderbook up to 10 s for the IOC buy's final state.
+    Returns (avg traded price, filled qty) — filled qty may be less than ordered.
+    Raises if nothing filled.
+    """
+    for _ in range(20):
+        for o in fyers.orderbook().get("orderBook", []):
+            if o.get("id") != order_id:
+                continue
+            status = o.get("status")
+            filled = int(o.get("filledQty") or 0)
+            if status == 2:                                   # fully traded
+                return float(o["tradedPrice"]), int(o.get("qty") or filled)
+            if status in (1, 5):                              # cancelled (IOC remainder) / rejected
+                if filled > 0:
+                    return float(o["tradedPrice"]), filled
+                raise RuntimeError(f"IOC buy {order_id} not filled: {o.get('message', '')}")
+        time.sleep(0.5)
+    raise TimeoutError(f"Order {order_id} final state not confirmed within 10 s.")
+
+
+def _floor_tick(price: float, tick: float = 0.05) -> float:
+    return round(math.floor(round(price / tick, 6)) * tick, 2)
+
+
+def _ceil_tick(price: float, tick: float = 0.05) -> float:
+    return round(math.ceil(round(price / tick, 6)) * tick, 2)
+
 
 def _await_fill(order_id: str) -> float:
     """Poll orderbook up to 10 s for fill confirmation. Returns tradedPrice."""
@@ -379,12 +451,23 @@ def run_strategy() -> None:
              logger.info(
             "Active trade detected. Handing back to trade_manager."
         )
+             # The journal can say ACTIVE while Fyers holds nothing (exit
+             # rejected then broker auto-square-off, crash mid-exit, ...).
+             # Resuming that would manage - and keep alive - a ghost trade.
+             fy_sym  = to_fyers_symbol(today_trade["symbol"])
+             net_qty = get_net_position_qty(fy_sym)
+             if net_qty == 0:
+                 logger.warning("Journal says %s but Fyers has no open position for %s — closing journal.",
+                                status, today_trade["symbol"])
+                 s3_utils.update_trade(today_trade["symbol"], {"status": STATUS_CLOSED})
+                 tg.send(f"⚠️ {today_trade['symbol']} was {status} in journal but Fyers shows no position — marked CLOSED.")
+                 return "DAY_FINISHED"
              state = TradeState(
-            symbol=to_fyers_symbol(today_trade["symbol"]),
+            symbol=fy_sym,
             display_symbol=today_trade["symbol"],
             entry_price=float(today_trade["entry_price"]),
             sl_price=float(today_trade["sl_price"]),
-            initial_qty=int(today_trade["qty"]),
+            initial_qty=net_qty if net_qty else int(today_trade["qty"]),
         )
              run_trade_manager(state)
              logger.info(
@@ -417,6 +500,12 @@ def run_strategy() -> None:
         today_trade,
         capital
     )
+
+        # EXIT_FAILED or anything unrecognised → today's trade is done
+        # (needs manual attention); never fall through to a fresh entry.
+        else:
+            logger.info("Today's trade status is %s — no further trading today.", status)
+            return "DAY_FINISHED"
              # -----------------------------------
 
     
@@ -459,6 +548,7 @@ def run_strategy() -> None:
             "raw":    raw,
             "sym":    sym,
             "ltp":    ltp,
+            "entry":  float(row["entry"]),
             "sl":     sl,
             "sl_pct": sl_pct,
         })
@@ -492,13 +582,20 @@ def run_strategy() -> None:
         sym    = c["sym"]
         ltp    = c["ltp"]
         csv_sl = c["sl"]
+        entry  = c["entry"]
         sl_pct = c["sl_pct"]
 
         logger.info("── Evaluating: %s | LTP=₹%.2f | SL=₹%.2f | SL%%=%.2f", raw, ltp, csv_sl, sl_pct)
 
         blocked = _blocked_reason(raw)
         if blocked:
-            logger.info("SKIPPED %s — blocked by broker earlier today: %s", raw, blocked)
+            logger.info("SKIPPED %s — blocked earlier today: %s", raw, blocked)
+            continue
+
+        band = _circuit_band_pct(sym)
+        if band is not None and band <= SKIP_CIRCUIT_BAND_PCT:
+            _blocked_today[raw] = f"{band:.0f}% circuit stock"
+            logger.info("REJECTED %s — %.0f%% circuit stock (skip <= %d%%)", raw, band, SKIP_CIRCUIT_BAND_PCT)
             continue
 
         # ── a. SL% filter ─────────────────────────────────────
@@ -516,9 +613,28 @@ def run_strategy() -> None:
         )
             continue
 
-        # ── b. Position sizing ────────────────────────────────
+        # ── a1. Breakout window: entry <= LTP <= entry + MAX_CHASE_R × R ──
+        # Not blocked for the day — next minute's scan re-checks (pullback / breakout).
+        if csv_sl >= entry:
+            logger.warning("REJECTED %s — CSV entry ₹%.2f not above SL ₹%.2f", raw, entry, csv_sl)
+            continue
+        window_top = entry + MAX_CHASE_R * (entry - csv_sl)
+        if ltp < entry:
+            logger.info("WAIT %s — LTP ₹%.2f below breakout entry ₹%.2f (no breakout yet / failed)", raw, ltp, entry)
+            continue
+        if ltp > window_top:
+            logger.info(
+                "WAIT %s — LTP ₹%.2f is %.2fR past entry ₹%.2f (max %.1fR = ₹%.2f), not chasing",
+                raw, ltp, (ltp - entry) / (entry - csv_sl), entry, MAX_CHASE_R, window_top,
+            )
+            continue
+        limit_price = _floor_tick(window_top)
+        if limit_price < ltp:                     # tick rounding dropped below LTP
+            limit_price = _ceil_tick(ltp)
+
+        # ── b. Position sizing (worst-case fill = limit price) ─
         try:
-            qty = _calc_qty(ltp, csv_sl, capital)
+            qty = _calc_qty(limit_price, csv_sl, capital)
         except ValueError as exc:
             #tg.notify_rejection(raw, str(exc))
             continue
@@ -527,17 +643,17 @@ def run_strategy() -> None:
             #tg.notify_rejection(raw, "Qty = 0 (insufficient capital or SL too wide).")
             continue
 
-        risk_per_share = ltp - csv_sl
+        risk_per_share = limit_price - csv_sl
         logger.info(
-            "Sizing | qty=%d  R/share=₹%.2f  total_risk=₹%.2f  bp=₹%.2f",
-            qty, risk_per_share, qty * risk_per_share, capital * LEVERAGE,
+            "Sizing | qty=%d  entry=₹%.2f  limit=₹%.2f  R/share(max)=₹%.2f  total_risk(max)=₹%.2f  bp=₹%.2f",
+            qty, entry, limit_price, risk_per_share, qty * risk_per_share, capital * LEVERAGE,
         )
 
-        # ── c. Market buy ─────────────────────────────────────
+        # ── c. IOC limit buy (capped at breakout window top) ──
         try:
-            logger.info("Placing BUY: %s qty=%d", sym, qty)
-            order_id, qty = _place_buy_with_margin_retry(sym, qty)
-            entry_price   = _await_fill(order_id)
+            logger.info("Placing BUY: %s qty=%d limit=₹%.2f", sym, qty, limit_price)
+            order_id, qty    = _place_buy_with_margin_retry(sym, qty, limit_price)
+            entry_price, qty = _await_buy_fill(order_id)
         except Exception as exc:
             logger.error("BUY failed for %s: %s", sym, exc)
             if "Allowed Basket" in str(exc):

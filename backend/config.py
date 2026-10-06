@@ -43,11 +43,14 @@ S3_LOG_KEY = "trading-bot/logs/fyers_insidebar.log"
 # ─────────────────────────────────────────────────────────────
 MIN_CANDIDATES    = 2              # need >= 2 rows for today to proceed
 MAX_SL_PCT        = 2.0            # reject stock if actual SL% > 2%
+MAX_CHASE_R       = 0.5            # only buy while entry <= LTP <= entry + 0.5 × (entry − SL); never chase further
+SKIP_CIRCUIT_BAND_PCT = 5          # skip stocks whose NSE price band is <= 5% (2% / 5% circuit stocks)
 ACCOUNT_RISK_INR  = 1000           # ₹ risked per trade
 LEVERAGE          = 5              # intraday leverage multiplier
 MARGIN_SAFETY     = 0.95           # use 95% of buying power — Fyers MIS margin is often >20% (e.g. BEPL ~20.3%)
 
 PRODUCT_TYPE      = "INTRADAY"
+ORDER_TYPE_LIMIT  = 1              # Fyers: 1 = Limit Order
 ORDER_TYPE_MARKET = 2              # Fyers: 2 =  Market Order
 ORDER_TYPE_STOP   = 3              # Fyers: 3 = STOP-MARKET (SL-M)
 ORDER_SIDE_BUY    = 1
@@ -70,6 +73,9 @@ TRAIL_LEVELS = [
 STATUS_OPEN   = "OPEN"
 STATUS_ACTIVE = "ACTIVE"
 STATUS_CLOSED = "CLOSED"
+# Exit sell kept getting rejected - bot gave up, manual exit needed.
+# Deliberately not OPEN/ACTIVE so nothing waits on it forever.
+STATUS_EXIT_FAILED = "EXIT_FAILED"
 
 # ─────────────────────────────────────────────────────────────
 # SSM LOADER (cached, lazy)

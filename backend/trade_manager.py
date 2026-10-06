@@ -33,12 +33,18 @@ import telegram_notifier as tg
 from config import (
     TRAIL_LEVELS,
     ORDER_SIDE_SELL, PRODUCT_TYPE, ORDER_TYPE_MARKET,
-    STATUS_ACTIVE, STATUS_CLOSED,
+    STATUS_ACTIVE, STATUS_CLOSED, STATUS_EXIT_FAILED,
 )
 
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SEC = 30   # seconds between LTP polls
+MAX_EXIT_FAILURES = 5    # rejected exit sells before giving up → EXIT_FAILED
+
+# Fyers orderbook status codes
+ORDER_STATUS_CANCELLED = 1
+ORDER_STATUS_FILLED    = 2
+ORDER_STATUS_REJECTED  = 5
 
 # Return signals from run_trade_manager()
 SIGNAL_REENTRY = "REENTRY"
@@ -69,6 +75,7 @@ class TradeState:
     status:        str   = "OPEN"
     exit_price:    float = 0.0
     rr_achieved:   str   = "0R"
+    exit_failures: int   = 0
 
     def __post_init__(self) -> None:
         self.remaining_qty = self.initial_qty
@@ -123,7 +130,10 @@ def _market_sell(symbol: str, qty: int, reason: str) -> float:
             resp = fyers.place_order(data=payload)
             if resp.get("s") != "ok":
                 raise RuntimeError(f"Sell order rejected: {resp}")
-            fill = _get_ltp(symbol)
+            # s == "ok" only means Fyers accepted the order - RMS/exchange
+            # can still reject it a moment later, which used to be logged
+            # as a successful exit while the position stayed open.
+            fill = _await_sell_fill(resp.get("id"), symbol)
             logger.info("SELL (%s): qty=%d ~₹%.2f [attempt %d]", reason, qty, fill, attempt)
             return fill
         except Exception as exc:
@@ -131,6 +141,88 @@ def _market_sell(symbol: str, qty: int, reason: str) -> float:
             if attempt == 2:
                 raise
             time.sleep(1)
+
+
+def _await_sell_fill(order_id, symbol: str) -> float:
+    """Poll the orderbook up to ~10 s for the sell's final status.
+    Raises on REJECTED / CANCELLED. If it's still pending after the wait,
+    falls back to LTP as the approximate fill (previous behaviour)."""
+    if order_id:
+        for _ in range(20):
+            for o in fyers.orderbook().get("orderBook", []):
+                if o.get("id") != order_id:
+                    continue
+                status = o.get("status")
+                if status == ORDER_STATUS_FILLED:
+                    return float(o.get("tradedPrice") or _get_ltp(symbol))
+                if status in (ORDER_STATUS_REJECTED, ORDER_STATUS_CANCELLED):
+                    raise RuntimeError(
+                        f"Sell order {order_id} {'rejected' if status == ORDER_STATUS_REJECTED else 'cancelled'} "
+                        f"by broker: {o.get('message', '')}"
+                    )
+            time.sleep(0.5)
+        logger.warning("Sell order %s not confirmed within 10 s — using LTP as fill.", order_id)
+    return _get_ltp(symbol)
+
+
+def get_net_position_qty(symbol: str):
+    """Net open qty Fyers holds for `symbol` (0 if none), or None if the
+    positions API call failed - callers must treat None as unknown."""
+    try:
+        resp = fyers.positions()
+        if resp.get("s") != "ok":
+            logger.error("Positions API error: %s", resp)
+            return None
+        for p in resp.get("netPositions", []):
+            if p.get("symbol") == symbol:
+                return int(p.get("netQty") or 0)
+        return 0
+    except Exception as exc:
+        logger.error("Positions fetch failed for %s: %s", symbol, exc)
+        return None
+
+
+def _handle_exit_failure(state: TradeState, exc: Exception, ltp: float, what: str) -> bool:
+    """Called whenever an exit sell fails. Returns True when the trade
+    manager should stop (journal already finalised), False to retry next
+    tick. Without this, a sell the broker keeps rejecting looped forever
+    with the journal stuck at ACTIVE - which in turn kept the Dhan bot's
+    EC2 alive, sending "Active trade exists" to Telegram every minute."""
+    state.exit_failures += 1
+    logger.critical("%s sell FAILED (%d/%d): %s",
+                    what, state.exit_failures, MAX_EXIT_FAILURES, exc)
+
+    net_qty = get_net_position_qty(state.symbol)
+    if net_qty == 0:
+        # Broker already squared it off (or it was never really open) -
+        # nothing left to sell, so close the journal row.
+        logger.warning("No open Fyers position for %s — closing journal.", state.display_symbol)
+        tg.send(
+            f"⚠️ <b>EXIT REJECTED, POSITION ALREADY FLAT</b> — {state.display_symbol}\n"
+            f"{what} sell rejected: {exc}\nFyers shows no open position; journal closed at LTP ₹{ltp:.2f}."
+        )
+        _close_trade(state, ltp, state.rr_achieved or "0R", f"{what} sell rejected, position flat")
+        return True
+
+    if state.exit_failures == 1:
+        tg.send(f"⚠️ <b>{what} SELL REJECTED</b> — {state.display_symbol}\nReason: {exc}\nRetrying…")
+
+    if state.exit_failures >= MAX_EXIT_FAILURES:
+        state.status = STATUS_EXIT_FAILED
+        s3_utils.update_trade(state.display_symbol, {
+            "exit_price": "",
+            "rr_achieved": state.rr_achieved,
+            "status": STATUS_EXIT_FAILED,
+        })
+        tg.send(
+            f"🚨 <b>MANUAL EXIT NEEDED</b> — {state.display_symbol}\n"
+            f"{what} sell rejected {state.exit_failures}x. Last reason: {exc}\n"
+            f"Fyers net qty: {net_qty if net_qty is not None else 'unknown'}. "
+            f"Bot has stopped managing this trade."
+        )
+        return True
+
+    return False
 
 
 # ─────────────────────────────────────────────────────────────
@@ -243,12 +335,14 @@ def run_trade_manager(state: TradeState) -> str:
                 "SL triggered: ltp=₹%.2f <= sl=₹%.2f  trailed=%s — selling %d qty",
                 ltp, state.current_sl, state.sl_trailed, state.remaining_qty,
             )
-            tg.notify_sl_hit(state.display_symbol, state.current_sl)
+            if state.exit_failures == 0:
+                tg.notify_sl_hit(state.display_symbol, state.current_sl)
 
             try:
                 fill = _market_sell(state.symbol, state.remaining_qty, "SL hit")
             except Exception as exc:
-                logger.critical("SL market sell FAILED: %s — retrying next tick", exc)
+                if _handle_exit_failure(state, exc, ltp, "SL"):
+                    return SIGNAL_DONE
                 time.sleep(POLL_INTERVAL_SEC)
                 continue
 
@@ -284,13 +378,25 @@ def run_trade_manager(state: TradeState) -> str:
 
             # 5R → full exit
             if r_mult == 5:
-                fill = _market_sell(state.symbol, state.remaining_qty, "5R target")
+                try:
+                    fill = _market_sell(state.symbol, state.remaining_qty, "5R target")
+                except Exception as exc:
+                    state.levels_hit.discard(r_mult)   # retry next tick
+                    if _handle_exit_failure(state, exc, ltp, "5R target"):
+                        return SIGNAL_DONE
+                    break
                 _close_trade(state, fill, "5R", "5R target reached")
                 return SIGNAL_DONE
 
             # Partial exit (2R / 3R / 4R)
             if book_frac is not None:
-                _partial_exit(state, book_frac, r_mult)
+                try:
+                    _partial_exit(state, book_frac, r_mult)
+                except Exception as exc:
+                    state.levels_hit.discard(r_mult)   # retry next tick
+                    if _handle_exit_failure(state, exc, ltp, f"{r_mult}R partial"):
+                        return SIGNAL_DONE
+                    break
 
             # Trail SL upward — marks sl_trailed = True inside _update_sl
             if move_sl_to is not None:
