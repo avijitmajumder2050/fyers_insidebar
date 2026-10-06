@@ -45,6 +45,7 @@ MIN_CANDIDATES    = 2              # need >= 2 rows for today to proceed
 MAX_SL_PCT        = 2.0            # reject stock if actual SL% > 2%
 ACCOUNT_RISK_INR  = 1000           # ₹ risked per trade
 LEVERAGE          = 5              # intraday leverage multiplier
+MARGIN_SAFETY     = 0.95           # use 95% of buying power — Fyers MIS margin is often >20% (e.g. BEPL ~20.3%)
 
 PRODUCT_TYPE      = "INTRADAY"
 ORDER_TYPE_MARKET = 2              # Fyers: 2 =  Market Order

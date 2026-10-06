@@ -10,6 +10,7 @@ The log is APPENDED to S3 by:
   3. Writing the combined content back
 
 S3 key: trading-bot/logs/fyers_insidebar.log
+(holds only the current IST day — the first flush of a new day starts the file fresh)
 Bucket: dhan-trading-data
 
 Usage (call once at startup, before any logging):
@@ -110,10 +111,14 @@ class S3LogHandler(logging.Handler):
 
     def _append_to_s3(self, new_content: str) -> None:
         """Read existing S3 object (if any), append new_content, write back."""
+        today = _dt.datetime.now(_IST).strftime("%Y-%m-%d")
         existing = ""
         try:
             obj = self._s3.get_object(Bucket=self._bucket, Key=self._key)
             existing = obj["Body"].read().decode("utf-8")
+            # Previous day's log (or unknown format) → start fresh so the file never grows unbounded
+            if not existing.startswith(today):
+                existing = ""
         except self._s3.exceptions.NoSuchKey:
             pass   # first write — no existing log
         except Exception as exc:
@@ -178,6 +183,9 @@ def setup_logging(level: int = logging.INFO) -> None:
 
     # ── Root logger ───────────────────────────────────────────
     root = logging.getLogger()
+    # Drop any handler a library installed earlier (it caused every line to print twice)
+    for h in list(root.handlers):
+        root.removeHandler(h)
     root.setLevel(level)
     root.addHandler(console)
     root.addHandler(s3_handler)

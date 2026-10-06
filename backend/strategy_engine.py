@@ -21,6 +21,7 @@ import math
 from datetime import date
 import time
 import os
+import re
 import json
 
 from autologin import fyers
@@ -28,7 +29,7 @@ import s3_utils
 import telegram_notifier as tg
 from config import (
     MARKET_INDEX_SYMBOL, MARKET_MIN_CHANGE_PTS,
-    AVAILABLE_FUND_INR, LEVERAGE, ACCOUNT_RISK_INR,
+    AVAILABLE_FUND_INR, LEVERAGE, MARGIN_SAFETY, ACCOUNT_RISK_INR,
     MAX_SL_PCT, PRODUCT_TYPE,
     ORDER_TYPE_MARKET, ORDER_SIDE_BUY,
     EXCHANGE_PREFIX, SYMBOL_SUFFIX,
@@ -175,8 +176,43 @@ def _calc_qty(ltp: float, sl: float, capital: float) -> int:
     if risk_per_share <= 0:
         raise ValueError(f"LTP ₹{ltp} <= SL ₹{sl} — invalid candidate.")
     qty_by_risk  = math.floor(ACCOUNT_RISK_INR / risk_per_share)
-    qty_by_funds = math.floor((capital * LEVERAGE) / ltp)
+    qty_by_funds = math.floor((capital * LEVERAGE * MARGIN_SAFETY) / ltp)
     return min(qty_by_risk, qty_by_funds)
+
+
+# Symbols Fyers permanently rejected today (e.g. not in MIS basket) — skip, don't resend every minute
+_blocked_today: dict[str, str] = {}
+_blocked_day: date | None = None
+
+
+def _blocked_reason(raw: str) -> str | None:
+    global _blocked_day
+    if _blocked_day != date.today():
+        _blocked_today.clear()
+        _blocked_day = date.today()
+    return _blocked_today.get(raw)
+
+
+def _place_buy_with_margin_retry(symbol: str, qty: int) -> tuple[str, int]:
+    """
+    Place MARKET BUY; on 'Margin Shortfall' rejection, shrink qty to fit the
+    margin Fyers reports as available and retry once. Returns (order_id, qty).
+    """
+    try:
+        return _place_market_buy(symbol, qty), qty
+    except RuntimeError as exc:
+        m = re.search(r"Margin Shortfall:INR ([\d,.]+) Available:INR ([\d,.]+)", str(exc))
+        if not m:
+            raise
+        shortfall, available = (float(x.replace(",", "")) for x in m.groups())
+        new_qty = math.floor(qty * available / (available + shortfall) * 0.98)
+        if new_qty <= 0 or new_qty >= qty:
+            raise
+        logger.warning(
+            "Margin shortfall ₹%.2f on %s qty=%d — retrying with qty=%d",
+            shortfall, symbol, qty, new_qty,
+        )
+        return _place_market_buy(symbol, new_qty), new_qty
 
 
 # ─────────────────────────────────────────────────────────────
@@ -460,6 +496,11 @@ def run_strategy() -> None:
 
         logger.info("── Evaluating: %s | LTP=₹%.2f | SL=₹%.2f | SL%%=%.2f", raw, ltp, csv_sl, sl_pct)
 
+        blocked = _blocked_reason(raw)
+        if blocked:
+            logger.info("SKIPPED %s — blocked by broker earlier today: %s", raw, blocked)
+            continue
+
         # ── a. SL% filter ─────────────────────────────────────
         if sl_pct > MAX_SL_PCT:
             reason = f"Actual SL% {sl_pct:.2f}% exceeds max {MAX_SL_PCT}%"
@@ -495,10 +536,12 @@ def run_strategy() -> None:
         # ── c. Market buy ─────────────────────────────────────
         try:
             logger.info("Placing BUY: %s qty=%d", sym, qty)
-            order_id    = _place_market_buy(sym, qty)
-            entry_price = _await_fill(order_id)
+            order_id, qty = _place_buy_with_margin_retry(sym, qty)
+            entry_price   = _await_fill(order_id)
         except Exception as exc:
             logger.error("BUY failed for %s: %s", sym, exc)
+            if "Allowed Basket" in str(exc):
+                _blocked_today[raw] = "not in Fyers MIS (intraday) basket"
             #tg.notify_rejection(raw, f"Order error: {exc}")
             continue
 
