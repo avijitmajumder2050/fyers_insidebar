@@ -3,7 +3,7 @@ strategy_engine.py — InsideBar Breakout Strategy Orchestrator.
 
 Execution order:
   0.  Market regime filter  → NIFTYMIDSML400-INDEX change >= +50 pts  (HARD GATE)
-  1.  Load today's candidates from S3 CSV  (>= 2 rows required)
+  1.  Load today's candidates from S3 CSV  (>= MIN_CANDIDATES rows required)
   2.  One-trade-per-day global lock via S3 journal
   3.  Batch LTP fetch for all candidates in ONE API call
   4.  Rank by LIVE SL% ASC
@@ -30,7 +30,7 @@ import telegram_notifier as tg
 from config import (
     MARKET_INDEX_SYMBOL, MARKET_MIN_CHANGE_PTS,
     AVAILABLE_FUND_INR, LEVERAGE, MARGIN_SAFETY, ACCOUNT_RISK_INR,
-    MAX_SL_PCT, MAX_CHASE_R, SKIP_CIRCUIT_BAND_PCT, PRODUCT_TYPE,
+    MAX_SL_PCT, MAX_CHASE_R, ENTRY_POLL_SEC, SKIP_CIRCUIT_BAND_PCT, PRODUCT_TYPE,
     ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, ORDER_SIDE_BUY,
     EXCHANGE_PREFIX, SYMBOL_SUFFIX,
     STATUS_OPEN, STATUS_CLOSED,
@@ -418,7 +418,7 @@ def run_strategy() -> None:
 
     # ─────────────────────────────────────────────────────────
     # Gate 1: Daily candidate count
-    # Requires >= 2 rows for today in insidebar CSV.
+    # Requires >= MIN_CANDIDATES rows for today in insidebar CSV.
     # ─────────────────────────────────────────────────────────
     logger.info("STEP-1 LOAD CANDIDATES")
     candidates = s3_utils.load_today_candidates()
@@ -814,7 +814,7 @@ def run_strategy_forever():
         except Exception as e:
             logger.error("Strategy crashed: %s", e)
 
-        time.sleep(60)
+        time.sleep(ENTRY_POLL_SEC)
     logger.info("Exited while loop")
 # ─────────────────────────────────────────────────────────────
 # Entry point

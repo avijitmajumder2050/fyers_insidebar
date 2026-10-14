@@ -41,7 +41,8 @@ S3_LOG_KEY = "trading-bot/logs/fyers_insidebar.log"
 # ─────────────────────────────────────────────────────────────
 # STRATEGY CONSTANTS
 # ─────────────────────────────────────────────────────────────
-MIN_CANDIDATES    = 2              # need >= 2 rows for today to proceed
+MIN_CANDIDATES    = 1              # trade as soon as the first candidate appears (2 delayed REDINGTON 21 min on 2026-10-14)
+ENTRY_POLL_SEC    = 15             # seconds between scans while waiting for an entry (was 60)
 MAX_SL_PCT        = 2.0            # reject stock if actual SL% > 2%
 MAX_CHASE_R       = 0.5            # only buy while entry <= LTP <= entry + 0.5 × (entry − SL); never chase further
 SKIP_CIRCUIT_BAND_PCT = 5          # skip stocks whose NSE price band is <= 5% (2% / 5% circuit stocks)
