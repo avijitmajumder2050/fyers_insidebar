@@ -35,7 +35,8 @@ SSM_APP_ID    = "/fyers/APP_ID"      # ABCDE
 # MARKET REGIME FILTER
 # ─────────────────────────────────────────────────────────────
 MARKET_INDEX_SYMBOL    = "NSE:NIFTYMIDSML400-INDEX"
-MARKET_MIN_CHANGE_PTS  = -50     # NIFTYMIDSML400 must be up >= +50 pts
+MARKET_MIN_CHANGE_PTS  = -50     # NIFTYMIDSML400 Δ >= this → full qty; below → WEAK_MARKET_QTY_FACTOR
+WEAK_MARKET_QTY_FACTOR = 0.5     # weak market: still enter, but with 50% qty (was: no trade at all)
 S3_LOG_KEY = "trading-bot/logs/fyers_insidebar.log"
 
 # ─────────────────────────────────────────────────────────────

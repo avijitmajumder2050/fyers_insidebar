@@ -2,7 +2,8 @@
 strategy_engine.py — InsideBar Breakout Strategy Orchestrator.
 
 Execution order:
-  0.  Market regime filter  → NIFTYMIDSML400-INDEX change >= +50 pts  (HARD GATE)
+  0.  Market regime sizing  → NIFTYMIDSML400-INDEX Δ >= MARKET_MIN_CHANGE_PTS → 100% qty,
+                               else WEAK_MARKET_QTY_FACTOR (50%) qty
   1.  Load today's candidates from S3 CSV  (>= MIN_CANDIDATES rows required)
   2.  One-trade-per-day global lock via S3 journal
   3.  Batch LTP fetch for all candidates in ONE API call
@@ -28,7 +29,7 @@ from autologin import fyers
 import s3_utils
 import telegram_notifier as tg
 from config import (
-    MARKET_INDEX_SYMBOL, MARKET_MIN_CHANGE_PTS,
+    MARKET_INDEX_SYMBOL, MARKET_MIN_CHANGE_PTS, WEAK_MARKET_QTY_FACTOR,
     AVAILABLE_FUND_INR, LEVERAGE, MARGIN_SAFETY, ACCOUNT_RISK_INR,
     MAX_SL_PCT, MAX_CHASE_R, ENTRY_POLL_SEC, SKIP_CIRCUIT_BAND_PCT, PRODUCT_TYPE,
     ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, ORDER_SIDE_BUY,
@@ -186,13 +187,14 @@ def _calc_sl_pct(ltp: float, sl: float) -> float:
     return round(abs((ltp - sl) / ltp) * 100, 2)
 
 
-def _calc_qty(ltp: float, sl: float, capital: float) -> int:
+def _calc_qty(ltp: float, sl: float, capital: float, qty_factor: float = 1.0) -> int:
+    """qty_factor scales the final qty (WEAK_MARKET_QTY_FACTOR in a weak market)."""
     risk_per_share = ltp - sl
     if risk_per_share <= 0:
         raise ValueError(f"LTP ₹{ltp} <= SL ₹{sl} — invalid candidate.")
     qty_by_risk  = math.floor(ACCOUNT_RISK_INR / risk_per_share)
     qty_by_funds = math.floor((capital * LEVERAGE * MARGIN_SAFETY) / ltp)
-    return min(qty_by_risk, qty_by_funds)
+    return math.floor(min(qty_by_risk, qty_by_funds) * qty_factor)
 
 
 # Symbols Fyers permanently rejected today (e.g. not in MIS basket) — skip, don't resend every minute
@@ -342,21 +344,18 @@ def _await_fill(order_id: str) -> float:
 
 
 # ─────────────────────────────────────────────────────────────
-# Gate 0 — Market regime filter (NON-NEGOTIABLE)
+# Gate 0 — Market regime → position size factor
 # ─────────────────────────────────────────────────────────────
 
 def _check_market_regime() -> bool:
     """
-    HARD PRE-CONDITION before any trading logic.
-
     Fetch NIFTYMIDSML400-INDEX via Fyers quotes API.
     Extract 'ch' (point change from previous close).
 
-    RULE:
-      ch >= +50  → PASS  (market is sufficiently strong)
-      ch <  +50  → FAIL  (no trade today, system stops)
-
-    Returns True to continue, False to abort.
+    RULE (sizing only — never blocks entry):
+      ch >= MARKET_MIN_CHANGE_PTS  → True   (favourable → 100% qty)
+      ch <  MARKET_MIN_CHANGE_PTS  → False  (weak → WEAK_MARKET_QTY_FACTOR qty)
+      no data / error              → False  (treated as weak)
     """
     try:
         data   = _batch_quotes([MARKET_INDEX_SYMBOL])
@@ -364,7 +363,7 @@ def _check_market_regime() -> bool:
 
         if not info:
             logger.error(
-                "Market regime: no data returned for %s — blocking trade.",
+                "Market regime: no data returned for %s — treating as weak market.",
                 MARKET_INDEX_SYMBOL,
             )
             #tg.notify_no_trade(f"Market filter FAILED: no data for {MARKET_INDEX_SYMBOL}")
@@ -374,7 +373,7 @@ def _check_market_regime() -> bool:
         change = info["ch"]
 
         logger.info(
-            "Market regime check: %s  LTP=%.2f  Δ=%.2f pts  (need >= +%.0f)",
+            "Market regime check: %s  LTP=%.2f  Δ=%.2f pts  (full qty needs >= %.0f)",
             MARKET_INDEX_SYMBOL, ltp, change, MARKET_MIN_CHANGE_PTS,
         )
 
@@ -382,16 +381,15 @@ def _check_market_regime() -> bool:
             #tg.notify_market_pass(MARKET_INDEX_SYMBOL, change)
             return True
 
-        # FAIL — log clearly and block all further execution
         logger.info(
-            "Market regime FAILED: Δ=%.2f < %.0f — NO TRADE TODAY.",
-            change, MARKET_MIN_CHANGE_PTS,
+            "Market regime WEAK: Δ=%.2f < %.0f — entries use %.0f%% qty.",
+            change, MARKET_MIN_CHANGE_PTS, WEAK_MARKET_QTY_FACTOR * 100,
         )
         #tg.notify_market_fail(MARKET_INDEX_SYMBOL, change)
         return False
 
     except Exception as exc:
-        logger.error("Market regime check threw: %s — blocking trade as safe default.", exc)
+        logger.error("Market regime check threw: %s — treating as weak market.", exc)
         #tg.notify_no_trade(f"Market filter error: {exc}")
         return False
 
@@ -409,12 +407,11 @@ def run_strategy() -> None:
     
 
     # ─────────────────────────────────────────────────────────
-    # Gate 0: Market regime filter
-    # NIFTYMIDSML400-INDEX must be up >= +50 pts.
-    # Any failure here → hard stop, no trade, no further checks.
+    # Gate 0: Market regime → qty factor (enter immediately either way)
+    # NIFTYMIDSML400-INDEX Δ >= MARKET_MIN_CHANGE_PTS → 100% qty,
+    # otherwise WEAK_MARKET_QTY_FACTOR of normal qty.
     # ─────────────────────────────────────────────────────────
-    if not _check_market_regime():
-        return
+    qty_factor = 1.0 if _check_market_regime() else WEAK_MARKET_QTY_FACTOR
 
     # ─────────────────────────────────────────────────────────
     # Gate 1: Daily candidate count
@@ -634,7 +631,7 @@ def run_strategy() -> None:
 
         # ── b. Position sizing (worst-case fill = limit price) ─
         try:
-            qty = _calc_qty(limit_price, csv_sl, capital)
+            qty = _calc_qty(limit_price, csv_sl, capital, qty_factor)
         except ValueError as exc:
             #tg.notify_rejection(raw, str(exc))
             continue
@@ -645,8 +642,8 @@ def run_strategy() -> None:
 
         risk_per_share = limit_price - csv_sl
         logger.info(
-            "Sizing | qty=%d  entry=₹%.2f  limit=₹%.2f  R/share(max)=₹%.2f  total_risk(max)=₹%.2f  bp=₹%.2f",
-            qty, entry, limit_price, risk_per_share, qty * risk_per_share, capital * LEVERAGE,
+            "Sizing | qty=%d (%.0f%%)  entry=₹%.2f  limit=₹%.2f  R/share(max)=₹%.2f  total_risk(max)=₹%.2f  bp=₹%.2f",
+            qty, qty_factor * 100, entry, limit_price, risk_per_share, qty * risk_per_share, capital * LEVERAGE,
         )
 
         # ── c. IOC limit buy (capped at breakout window top) ──
@@ -734,7 +731,7 @@ def run_strategy() -> None:
                     if reentry_sl_pct > MAX_SL_PCT:
                         raise ValueError(f"Re-entry SL% {reentry_sl_pct:.2f}% > max structural limit {MAX_SL_PCT}%")
 
-                    reentry_qty = _calc_qty(final_ltp, csv_sl, capital)
+                    reentry_qty = _calc_qty(final_ltp, csv_sl, capital, qty_factor)
                     if reentry_qty <= 0:
                         raise ValueError("Calculated re-entry quantity yielded 0. Insufficient funds.")
 
